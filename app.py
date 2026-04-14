@@ -110,7 +110,6 @@ with st.sidebar.expander("🔍 System ID & Hardware Check", expanded=False):
     selected_lookup = st.selectbox("Search Student ID:", lookup_list)
     
     if selected_lookup != "-- Select Profile --":
-        # Find ID in /cards
         c_info = next((v for v in cards_raw.values() if v.get('student_id') == selected_lookup), None)
         r_id = c_info.get('card_id', 'Unlinked') if c_info else "No Record"
         f_id = c_info.get('fingerprint_id', 'Unlinked') if c_info else "No Record"
@@ -144,7 +143,6 @@ if current_hw_mode == "Enrollment":
                         "student_id": n_id, "name": n_name, "rfid": n_rfid if n_rfid else "Unlinked", 
                         "course": n_course, "registered_date": n_date
                     })
-                    # Re-bind logic for /cards
                     existing_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
                     card_payload = {
                         "student_id": n_id, "name": n_name, "card_id": n_rfid, 
@@ -166,6 +164,21 @@ if current_hw_mode == "Enrollment":
                     "RFID_UID": card_info.get('card_id', 'Unlinked'), "FP_ID": card_info.get('fingerprint_id', 'N/A')
                 })
             st.dataframe(pd.DataFrame(master_registry).sort_values("student_id"), use_container_width=True)
+
+            # 🚀 RESTORED & UPGRADED: Delete Student Interface
+            st.markdown("---")
+            st.subheader("⚠️ Danger Zone: Remove Student")
+            del_id = st.selectbox("Select Student Profile to remove:", sorted(students_data.keys()))
+            if st.button("🗑️ Permanently Delete Student Profile"):
+                # 1. Delete from /students node
+                db.reference(f'/students/{del_id}').delete()
+                
+                # 2. Delete linked hardware token from /cards node to prevent ghost accounts
+                card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
+                if card_key:
+                    db.reference(f'/cards/{card_key}').delete()
+                    
+                st.warning(f"Profile {del_id} and associated hardware tokens erased from cloud database."); st.rerun()
 
 else:
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
