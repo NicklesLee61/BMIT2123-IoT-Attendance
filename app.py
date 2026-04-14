@@ -142,31 +142,25 @@ if current_hw_mode == "Enrollment":
 
             if st.form_submit_button("Finalize Registration / Update"):
                 if n_id:
-                    # 🚀 THE ANTI-COLLISION ENGINE
                     rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
                     fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
                     
                     has_conflict = False
                     
-                    # 1. RFID Conflict Check
                     if n_rfid and n_rfid in rfid_owners and rfid_owners[n_rfid] != n_id:
                         st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by Student ID: {rfid_owners[n_rfid]}")
                         has_conflict = True
                         
-                    # 2. Fingerprint Conflict Check
                     if n_fpid and n_fpid in fpid_owners and fpid_owners[n_fpid] != n_id:
                         st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by Student ID: {fpid_owners[n_fpid]}")
                         has_conflict = True
                         
-                    # 3. Student ID Accident Overwrite Protection (PRIVACY SECURED)
                     if n_id in students_data and n_name:
                         existing_name = students_data[n_id].get('name', '')
                         if existing_name and n_name.lower() != existing_name.lower():
-                            # 🚀 Changed here: Removed the real name to protect student privacy
                             st.error(f"❌ **ID Conflict:** Student ID `{n_id}` is already registered in the system. If you meant to re-bind their card, please leave the 'Full Name' field blank to prevent overwriting their profile.")
                             has_conflict = True
 
-                    # 🟢 Proceed if no conflicts detected
                     if not has_conflict:
                         exist_stu = students_data.get(n_id, {})
                         exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
@@ -303,7 +297,8 @@ else:
         if not df_all.empty:
             ctrl_col1, ctrl_col2 = st.columns(2)
             with ctrl_col1:
-                selected_date = st.date_input("📅 Filter by Date:", datetime.now())
+                # 这个日历其实是可以用鼠标点击换日期的哦！
+                selected_date = st.date_input("📅 Filter by Date:", datetime.now(), key="live_date")
                 selected_date_str = selected_date.strftime("%Y-%m-%d")
             with ctrl_col2:
                 search_log = st.text_input("🔍 Search Record (by ID or Name):", placeholder="e.g. 2413458, Sakiko...")
@@ -349,13 +344,14 @@ else:
     with tab_console:
         st.header("🛠️ Attendance Management Console")
         c_add, c_mod = st.columns(2)
+        
         with c_add:
             st.subheader("➕ Create Manual Record")
             with st.form("force_add_form"):
                 
                 if profile_mapping:
                     m_disp = st.selectbox("Target Profile:", sorted(profile_mapping.keys()))
-                    m_date = st.date_input("Date:", datetime.now())
+                    m_date = st.date_input("Date:", datetime.now(), key="manual_add_date")
                     m_time = st.time_input("Time:", dt_time(9, 0))
                     
                     m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
@@ -374,19 +370,54 @@ else:
         with c_mod:
             st.subheader("📝 Modify or Delete Entries")
             if not df_all.empty:
-                log_display_labels = df_all['formatted_time'] + " | " + df_all['name'] + " (" + df_all['status'].apply(display_status_emoji) + ")"
-                to_manage_display = st.selectbox("Select Entry:", log_display_labels.tolist())
+                # 🚀 UPGRADED: "View All History" super toggle!
+                st.markdown("##### 🔍 Search Filters")
+                show_all_dates = st.checkbox("🕰️ View All History (Disable Date Filter)")
                 
-                row = df_all[log_display_labels == to_manage_display].iloc[0]
+                mod_filter_col1, mod_filter_col2 = st.columns(2)
+                with mod_filter_col1:
+                    # Date picker automatically disables if they want to view all history
+                    mod_date = st.date_input("Filter by Date:", datetime.now(), key="mod_date_filter", disabled=show_all_dates)
+                    mod_date_str = mod_date.strftime("%Y-%m-%d")
+                with mod_filter_col2:
+                    filter_options = ["-- All Students --"] + sorted(profile_mapping.keys()) if profile_mapping else ["-- All Students --"]
+                    mod_student = st.selectbox("Filter by Student:", filter_options, key="mod_student_filter")
                 
-                with st.expander("Update Status"):
-                    new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
-                    if st.button("Update Entry"):
-                        db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
-                        st.success("Updated!"); st.rerun()
-                if st.button("🗑️ Delete Entry", key="del_entry"):
-                    db.reference(f'/attendance/{row["firebase_path"]}').delete()
-                    st.warning("Removed."); st.rerun()
+                # Apply Date Logic
+                if show_all_dates:
+                    filtered_df = df_all.copy() # Load everything!
+                else:
+                    filtered_df = df_all[df_all['record_date'] == mod_date_str] # Load specific date
+                
+                # Apply Student Filter
+                if mod_student != "-- All Students --":
+                    selected_sid = profile_mapping[mod_student]
+                    filtered_df = filtered_df[filtered_df['student_id'] == selected_sid]
+                
+                st.markdown("---")
+                
+                if not filtered_df.empty:
+                    log_display_labels = filtered_df['formatted_time'] + " | " + filtered_df['name'] + " (" + filtered_df['status'].apply(display_status_emoji) + ")"
+                    to_manage_display = st.selectbox("Select Entry to Manage:", log_display_labels.tolist())
+                    
+                    row = filtered_df[log_display_labels == to_manage_display].iloc[0]
+                    
+                    with st.expander("✏️ Update Status"):
+                        new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
+                        if st.button("Submit Update"):
+                            db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
+                            st.success("Updated successfully!"); st.rerun()
+                            
+                    if st.button("🗑️ Permanently Delete Entry", key="del_entry"):
+                        db.reference(f'/attendance/{row["firebase_path"]}').delete()
+                        st.warning("Entry removed completely from database."); st.rerun()
+                else:
+                    if show_all_dates and mod_student != "-- All Students --":
+                        st.info(f"No attendance records found for this student in the entire history.")
+                    else:
+                        st.info("No records found for the selected filters.")
+            else:
+                st.info("No attendance records available in the database yet.")
 
     with tab_m3:
         st.header("📊 Module 3: Advanced Analytics Interface")
