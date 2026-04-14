@@ -194,19 +194,47 @@ if current_hw_mode == "Enrollment":
             
             st.dataframe(reg_df, use_container_width=True)
 
+            # 🚀 UPGRADED: Two-Step Confirmation for Profile Deletion
             st.markdown("---")
             st.subheader("⚠️ Danger Zone: Remove Student")
             
             if profile_mapping:
                 del_disp = st.selectbox("Select Student Profile to remove:", sorted(profile_mapping.keys()))
                 
-                if st.button("🗑️ Permanently Delete Student Profile"):
-                    del_id = profile_mapping[del_disp]
-                    db.reference(f'/students/{del_id}').delete()
-                    card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
-                    if card_key:
-                        db.reference(f'/cards/{card_key}').delete()
-                    st.warning(f"Profile {del_disp} and associated hardware tokens erased from cloud database."); st.rerun()
+                # Initialize session state for deletion target if it doesn't exist
+                if 'delete_target' not in st.session_state:
+                    st.session_state['delete_target'] = None
+
+                # Reset the confirmation state if the user selects a different student from the dropdown
+                if st.session_state['delete_target'] != del_disp:
+                    st.session_state['delete_target'] = None
+
+                # State 1: Show the initial request button
+                if st.session_state['delete_target'] != del_disp:
+                    if st.button("🗑️ Request Profile Deletion"):
+                        st.session_state['delete_target'] = del_disp
+                        st.rerun()
+                        
+                # State 2: Show the confirmation warnings and action buttons
+                else:
+                    st.error(f"🛑 **ACTION REQUIRED:** Are you absolutely sure you want to permanently erase **{del_disp}**? This cannot be undone.")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Yes, Permanently Erase", type="primary"):
+                            del_id = profile_mapping[del_disp]
+                            db.reference(f'/students/{del_id}').delete()
+                            card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
+                            if card_key:
+                                db.reference(f'/cards/{card_key}').delete()
+                            
+                            st.session_state['delete_target'] = None # Reset state
+                            st.toast(f"🗑️ Profile {del_disp} has been completely erased!")
+                            time.sleep(1.5) # Allow toast to be seen before rerun
+                            st.rerun()
+                    with col2:
+                        if st.button("❌ Cancel Action"):
+                            st.session_state['delete_target'] = None # Reset state
+                            st.rerun()
 
     with tab_diag:
         st.subheader("⚙️ System Diagnostics & ID Management")
@@ -247,7 +275,6 @@ else:
         st.subheader("📋 Real-time Smart Attendance Feed")
         
         if not df_all.empty:
-            # 🚀 UPGRADED UI: Control Panel for Date and Search
             ctrl_col1, ctrl_col2 = st.columns(2)
             with ctrl_col1:
                 selected_date = st.date_input("📅 Filter by Date:", datetime.now())
@@ -258,7 +285,6 @@ else:
             view_df = df_all[df_all['record_date'] == selected_date_str]
             
             if not view_df.empty:
-                # KPI logic remains based on the whole class for that specific day
                 latest_daily = view_df.drop_duplicates(subset=['student_id'], keep='last')
                 present_count = len(latest_daily[latest_daily['status'] == 'present'])
                 absent_count = len(latest_daily[latest_daily['status'].astype(str).str.contains('absent', case=False)])
@@ -275,7 +301,6 @@ else:
 
                 display_df = view_df[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
                 
-                # 🚀 NEW: Apply the search filter to the table if the user typed something
                 if search_log:
                     search_cols = ['student_id', 'name']
                     mask = display_df[search_cols].apply(lambda row: row.astype(str).str.contains(search_log, case=False).any(), axis=1)
