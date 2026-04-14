@@ -107,23 +107,12 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
         control_ref.update({"mode": target_mode})
         st.rerun()
 
-    st.markdown("---")
-    if st.sidebar.button("🔔 Trigger Remote Buzzer"):
-        control_ref.update({"trigger_buzzer": True})
-        time.sleep(1) 
-        control_ref.update({"trigger_buzzer": False})
-        st.sidebar.success("Buzzer signal sent!")
-        
-    is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
-    control_ref.update({"is_locked": is_locked})
-
 # ==========================================================
 # 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
 # ==========================================================
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    # 🚀 UPDATED: Removed tab_diag
     tab_reg, tab_list = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry"])
     
     with tab_reg:
