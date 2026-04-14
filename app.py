@@ -123,7 +123,8 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    tab_reg, tab_list, tab_diag = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry", "⚙️ Hardware Diagnostics"])
+    # 🚀 UPDATED: Removed tab_diag
+    tab_reg, tab_list = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry"])
     
     with tab_reg:
         st.subheader("Student Registry & Smart Re-binding")
@@ -208,27 +209,6 @@ if current_hw_mode == "Enrollment":
                             st.session_state['delete_target'] = None; st.rerun()
                     with cc2:
                         if st.button("❌ Cancel"): st.session_state['delete_target'] = None; st.rerun()
-
-    with tab_diag:
-        st.subheader("⚙️ Real-time System Monitoring")
-        st.write("Live status tracking for the physical IoT hardware.")
-        m1, m2, m3 = st.columns(3)
-        last_seen_ts = db.reference('/system_status/last_seen').get() or 0
-        is_online = (time.time() - last_seen_ts) < 60 
-        m1.metric("Hardware Status", "ONLINE 🟢" if is_online else "OFFLINE 🔴")
-        fp_list_raw = db.reference('/system_status/fp_ids').get() or []
-        used_slots = len(fp_list_raw) if isinstance(fp_list_raw, list) else 0
-        m2.metric("FP Storage Usage", f"{used_slots} / 127 Slots")
-        m3.metric("Network Stability", "Stable ✅" if is_online else "Check Connection ⚠️")
-        st.write("---")
-        with st.container(border=True):
-            st.markdown("#### 📟 Live Hardware Event Log")
-            raw_logs = db.reference('/system_status/logs').get() or ["Waiting for logs..."]
-            log_entries = list(raw_logs.values()) if isinstance(raw_logs, dict) else list(raw_logs)
-            log_box = "".join([f"> {entry}\n" for entry in log_entries[-8:]])
-            st.code(log_box, language="bash")
-            st.progress(min(used_slots / 127, 1.0), text=f"Fingerprint memory: {round((used_slots/127)*100, 1)}%")
-        st.caption(f"Last Pi Heartbeat: {datetime.fromtimestamp(last_seen_ts).strftime('%H:%M:%S') if last_seen_ts else '---'}")
 
 else:
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
@@ -327,7 +307,7 @@ else:
                 else: st.info("No attendance records in database.")
 
     # ==========================================================
-    # 📊 tab_m3: REDESIGNED ADVANCED ANALYTICS INTERFACE
+    # 📊 tab_m3: ADVANCED ANALYTICS INTERFACE
     # ==========================================================
     with tab_m3:
         st.header("📊 Advanced Analytics Dashboard")
@@ -343,13 +323,12 @@ else:
                 'leave': '#3498db'
             }
 
-            # 🚀 1. TREND CHART (REVERTED TO NATIVE BAR CHART)
+            # 🚀 1. TREND CHART (NATIVE BAR CHART)
             with st.container(border=True):
                 st.subheader("📈 Daily Attendance Trend")
                 unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
                 if not unique_daily.empty:
                     daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
-                    # This will create the original blocky stacked bar chart you preferred
                     chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
                     st.bar_chart(chart_data, use_container_width=True)
                     
@@ -368,12 +347,10 @@ else:
                         p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_s)].sort_values('dt_obj')
                         if len(p_t) >= 2: 
                             hrs = round((p_t.iloc[-1]['dt_obj'] - p_t.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
-                            # 🚀 REVERTED: Using Student ID instead of Name for better privacy and aesthetics
                             dur_data.append({"ID": sid, "Hrs": hrs}) 
                             
                     if dur_data: 
                         dur_df = pd.DataFrame(dur_data)
-                        # 🚀 REVERTED: Back to the clean native Streamlit bar chart
                         st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
                     else: 
                         st.info("💡 Check-in and Check-out logs needed for today to calculate duration.")
@@ -383,7 +360,6 @@ else:
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
                     
-                    # 🚀 RETAINED: The beautiful Plotly Donut Chart
                     s_c = df_all['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
                     
