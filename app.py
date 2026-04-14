@@ -78,15 +78,15 @@ if not df_all.empty:
     def determine_flow(row):
         stat = str(row.get('status', '')).lower()
         
-        # 1. 缺席的人没有物理动作
+        #1. The absent person does not perform any physical actions
         if 'absent' in stat:
             return "--"
             
-        # 2. 手动标记为“离开课堂”，强制为退场动作
+       #2. Manually mark as "Leaving Classroom" to force an exit action
         if stat == 'leave':
             return "Check-out (Early)"
             
-        # 3. 硬件打卡的正常交替逻辑 (奇数进，偶数出)
+        # 3. Normal alternation logic for hardware check-in (odd numbers in, even numbers out)
         if row['tap_rank'] % 2 != 0:
             return "Check-in"
         else:
@@ -232,7 +232,7 @@ else:
             duration_data = []
             today_str = datetime.now().strftime("%Y-%m-%d")
             
-            # 🚀 排除缺席数据：确保缺席的人不会被错误计算时长
+            # 🚀 Exclude Absentee Data: Ensure that absent individuals are not incorrectly counted their time.
             valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
             
             for sid in students_data.keys():
