@@ -158,11 +158,12 @@ if current_hw_mode == "Enrollment":
                         st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by Student ID: {fpid_owners[n_fpid]}")
                         has_conflict = True
                         
-                    # 3. Student ID Accident Overwrite Protection
+                    # 3. Student ID Accident Overwrite Protection (PRIVACY SECURED)
                     if n_id in students_data and n_name:
                         existing_name = students_data[n_id].get('name', '')
                         if existing_name and n_name.lower() != existing_name.lower():
-                            st.error(f"❌ **ID Conflict:** Student ID `{n_id}` is already registered to **{existing_name}**. If you meant to re-bind their card, please leave the 'Full Name' field blank to prevent overwriting their profile.")
+                            # 🚀 Changed here: Removed the real name to protect student privacy
+                            st.error(f"❌ **ID Conflict:** Student ID `{n_id}` is already registered in the system. If you meant to re-bind their card, please leave the 'Full Name' field blank to prevent overwriting their profile.")
                             has_conflict = True
 
                     # 🟢 Proceed if no conflicts detected
