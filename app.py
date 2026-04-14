@@ -132,41 +132,72 @@ if current_hw_mode == "Enrollment":
         with st.form("enroll_form"):
             c1, c2 = st.columns(2)
             with c1:
-                n_id = st.text_input("Student ID (Required):")
-                n_name = st.text_input("Full Name:")
-                n_course = st.text_input("Academic Program:") 
+                n_id = st.text_input("Student ID (Required):").strip()
+                n_name = st.text_input("Full Name:").strip()
+                n_course = st.text_input("Academic Program:").strip()
             with c2:
-                n_rfid = st.text_input("New RFID UID:")
-                n_fpid = st.text_input("Fingerprint Token (Slot ID):")
+                n_rfid = st.text_input("New RFID UID:").strip()
+                n_fpid = st.text_input("Fingerprint Token (Slot ID):").strip()
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
             if st.form_submit_button("Finalize Registration / Update"):
                 if n_id:
-                    exist_stu = students_data.get(n_id, {})
-                    exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
-                    exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
+                    # 🚀 THE ANTI-COLLISION ENGINE
+                    rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
+                    fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
+                    
+                    has_conflict = False
+                    
+                    # 1. RFID Conflict Check
+                    if n_rfid and n_rfid in rfid_owners and rfid_owners[n_rfid] != n_id:
+                        st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by Student ID: {rfid_owners[n_rfid]}")
+                        has_conflict = True
+                        
+                    # 2. Fingerprint Conflict Check
+                    if n_fpid and n_fpid in fpid_owners and fpid_owners[n_fpid] != n_id:
+                        st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by Student ID: {fpid_owners[n_fpid]}")
+                        has_conflict = True
+                        
+                    # 3. Student ID Accident Overwrite Protection
+                    if n_id in students_data and n_name:
+                        existing_name = students_data[n_id].get('name', '')
+                        if existing_name and n_name.lower() != existing_name.lower():
+                            st.error(f"❌ **ID Conflict:** Student ID `{n_id}` is already registered to **{existing_name}**. If you meant to re-bind their card, please leave the 'Full Name' field blank to prevent overwriting their profile.")
+                            has_conflict = True
 
-                    final_name = n_name if n_name else exist_stu.get('name', 'Unknown')
-                    final_course = n_course if n_course else exist_stu.get('course', 'Unknown')
-                    final_rfid = n_rfid if n_rfid else exist_card.get('card_id', 'Unlinked')
-                    final_fpid = n_fpid if n_fpid else exist_card.get('fingerprint_id', 'Unlinked')
+                    # 🟢 Proceed if no conflicts detected
+                    if not has_conflict:
+                        exist_stu = students_data.get(n_id, {})
+                        exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
+                        exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
 
-                    db.reference(f'/students/{n_id}').update({
-                        "student_id": n_id, "name": final_name, "rfid": final_rfid, 
-                        "course": final_course, "registered_date": n_date
-                    })
+                        is_new_student = n_id not in students_data
 
-                    card_payload = {
-                        "student_id": n_id, "name": final_name, "card_id": final_rfid, 
-                        "course": final_course, "fingerprint_id": final_fpid, "registered_date": n_date
-                    }
-                    if exist_card_key:
-                        db.reference(f'/cards/{exist_card_key}').update(card_payload)
-                    else:
-                        if final_rfid != "Unlinked" or final_fpid != "Unlinked":
-                            db.reference('/cards').push().set(card_payload)
-                            
-                    st.success(f"Profile {n_id} updated successfully!"); st.rerun()
+                        final_name = n_name if n_name else exist_stu.get('name', 'Unknown')
+                        final_course = n_course if n_course else exist_stu.get('course', 'Unknown')
+                        final_rfid = n_rfid if n_rfid else exist_card.get('card_id', 'Unlinked')
+                        final_fpid = n_fpid if n_fpid else exist_card.get('fingerprint_id', 'Unlinked')
+
+                        db.reference(f'/students/{n_id}').update({
+                            "student_id": n_id, "name": final_name, "rfid": final_rfid, 
+                            "course": final_course, "registered_date": n_date
+                        })
+
+                        card_payload = {
+                            "student_id": n_id, "name": final_name, "card_id": final_rfid, 
+                            "course": final_course, "fingerprint_id": final_fpid, "registered_date": n_date
+                        }
+                        
+                        if exist_card_key:
+                            db.reference(f'/cards/{exist_card_key}').update(card_payload)
+                        else:
+                            if final_rfid != "Unlinked" or final_fpid != "Unlinked":
+                                db.reference('/cards').push().set(card_payload)
+                                
+                        if is_new_student:
+                            st.success(f"🎉 New Profile {n_id} created successfully!"); st.rerun()
+                        else:
+                            st.success(f"🔄 Existing Profile {n_id} updated successfully!"); st.rerun()
                 else:
                     st.error("⚠️ Student ID is required to process the update.")
 
@@ -194,28 +225,22 @@ if current_hw_mode == "Enrollment":
             
             st.dataframe(reg_df, use_container_width=True)
 
-            # 🚀 UPGRADED: Two-Step Confirmation for Profile Deletion
             st.markdown("---")
             st.subheader("⚠️ Danger Zone: Remove Student")
             
             if profile_mapping:
                 del_disp = st.selectbox("Select Student Profile to remove:", sorted(profile_mapping.keys()))
                 
-                # Initialize session state for deletion target if it doesn't exist
                 if 'delete_target' not in st.session_state:
                     st.session_state['delete_target'] = None
 
-                # Reset the confirmation state if the user selects a different student from the dropdown
                 if st.session_state['delete_target'] != del_disp:
                     st.session_state['delete_target'] = None
 
-                # State 1: Show the initial request button
                 if st.session_state['delete_target'] != del_disp:
                     if st.button("🗑️ Request Profile Deletion"):
                         st.session_state['delete_target'] = del_disp
                         st.rerun()
-                        
-                # State 2: Show the confirmation warnings and action buttons
                 else:
                     st.error(f"🛑 **ACTION REQUIRED:** Are you absolutely sure you want to permanently erase **{del_disp}**? This cannot be undone.")
                     col1, col2 = st.columns(2)
@@ -227,13 +252,13 @@ if current_hw_mode == "Enrollment":
                             if card_key:
                                 db.reference(f'/cards/{card_key}').delete()
                             
-                            st.session_state['delete_target'] = None # Reset state
+                            st.session_state['delete_target'] = None 
                             st.toast(f"🗑️ Profile {del_disp} has been completely erased!")
-                            time.sleep(1.5) # Allow toast to be seen before rerun
+                            time.sleep(1.5) 
                             st.rerun()
                     with col2:
                         if st.button("❌ Cancel Action"):
-                            st.session_state['delete_target'] = None # Reset state
+                            st.session_state['delete_target'] = None 
                             st.rerun()
 
     with tab_diag:
