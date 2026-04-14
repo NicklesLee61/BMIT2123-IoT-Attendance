@@ -93,6 +93,29 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
     is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
     control_ref.update({"is_locked": is_locked})
 
+# --- NEW: ADVANCED HARDWARE MAINTENANCE MODULE ---
+with st.sidebar.expander("🛠️ Advanced Hardware Maintenance", expanded=False):
+    
+    # Feature A: Clear Sensor's Fingerprint Library
+    st.markdown("⚠️ **DANGER ZONE**")
+    if st.button("🗑️ Erase All Fingerprints"):
+        # Send execution command to the Firebase control node
+        control_ref.update({"clear_all_fp": True})
+        st.toast("Erase command sent. Check hardware feedback...")
+    
+    st.markdown("---")
+    
+    # Feature B: Query Stored Hardware IDs
+    if st.button("🔍 Query Stored FP IDs"):
+        # Send request flag to fetch stored IDs from the sensor
+        control_ref.update({"request_id_list": True})
+        st.toast("Requesting hardware data...")
+
+    # Fetch and display the query results from the new Firebase status node
+    fp_status = db.reference('/system_status/fp_ids').get()
+    if fp_status:
+        st.info(f"Currently Occupied FP IDs: \n{fp_status}")
+
 # ==========================================================
 # 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
 # ==========================================================
