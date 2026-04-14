@@ -13,39 +13,38 @@ import io
 # ==========================================================
 st.set_page_config(page_title="IoT Master Command", layout="wide", page_icon="🛡️")
 
-# Initialize Firebase using Streamlit Secrets for cloud security
+# Initialize Firebase using Streamlit Secrets for production deployment
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
             # Production: Fetch credentials from Streamlit Cloud Secrets
             cred_dict = dict(st.secrets["firebase"])
-            # Handle newline character in the private key string
             cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(cred_dict)
         else:
-            # Local Development: Fallback to local JSON key file
+            # Local development environment fallback
             cred = credentials.Certificate("service-account-key.json")
             
         firebase_admin.initialize_app(cred, {
             'databaseURL': 'https://bmit2123-iot-71ac4-default-rtdb.asia-southeast1.firebasedatabase.app'
         })
     except Exception as e:
-        st.error(f"Logic Failure: Database connection lost. {e}"); st.stop()
+        st.error(f"Database Initialization Failed: {e}"); st.stop()
 
 # ==========================================================
-# 2. DATA ENGINE: RANKING & DURATION LOGIC
+# 2. DATA ENGINE: LOGIC & DURATION CALCULATIONS
 # ==========================================================
-# Fetch hardware control state to drive mode-aware UI
+# Fetch hardware state to drive dynamic UI
 control_ref = db.reference('/control')
 hw_state = control_ref.get() or {"mode": "Attendance", "is_locked": False}
 current_hw_mode = hw_state.get('mode', 'Attendance')
 
-# Fetch core database nodes
+# Fetch primary database nodes
 students_data = db.reference('/students').get() or {} 
-cards_data = db.reference('/cards').get() or {}       
+cards_raw = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
-# Process raw logs for identification and duration calculation
+# Process attendance logs for smart flow detection (Check-in vs Leave)
 all_records = []
 if attendance_raw:
     for date_key, daily_data in attendance_raw.items():
@@ -57,107 +56,110 @@ if attendance_raw:
 
 df_all = pd.DataFrame(all_records)
 if not df_all.empty:
-    # Logic: Convert timestamps to objects for duration math
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
-    # Format as string to prevent Excel '###' display issues
     df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
-    # Logic: Identify tap sequence per student per day (1st=In, 2nd=Out)
+    # Logic: Identify tap sequence (1st = Check-in, >=2nd = Leave)
     df_all = df_all.sort_values('dt_obj')
     df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
     df_all['flow_type'] = df_all['tap_rank'].apply(lambda x: "Check-in" if x == 1 else "Leave")
 
 # ==========================================================
-# 3. SIDEBAR: REMOTE HARDWARE COMMAND CENTER
+# 3. SIDEBAR: REMOTE CONTROL CENTER
 # ==========================================================
 st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
 
 with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
-    # Mode selection logic to distinguish Enrollment and Attendance interfaces
     target_mode = st.selectbox("Set System Mode:", ["Attendance", "Enrollment"], 
                                index=0 if current_hw_mode == "Attendance" else 1)
-    if st.sidebar.button("Apply Mode Change"):
-        control_ref.update({"mode": target_mode}); st.rerun()
+    if st.sidebar.button("Apply Mode Update"):
+        control_ref.update({"mode": target_mode})
+        st.rerun()
     
-    # Global lockdown toggle
     is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
     control_ref.update({"is_locked": is_locked})
 
 # ==========================================================
-# 4. MAIN INTERFACE: MODE-AWARE DYNAMIC UI
+# 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
 # ==========================================================
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    # --- ENROLLMENT MODE: REGISTRY & STUDENT FORM ---
-    tab_reg, tab_list = st.tabs(["➕ Student Enrollment", "🗃️ Master Registry"])
+    # --- ENROLLMENT MODE: REGISTRY & STUDENT PROFILES ---
+    tab_reg, tab_list = st.tabs(["➕ Student Registration", "🗃️ Master Registry"])
     
     with tab_reg:
         st.subheader("Student Personal Information Registry")
         with st.form("enroll_form"):
-            c1, c2 = st.columns(2)
-            with c1:
+            col1, col2 = st.columns(2)
+            with col1:
                 n_id = st.text_input("Student ID (Unique):")
                 n_name = st.text_input("Full Name:")
-                # USER INPUT: Manual course entry requirement
-                n_course = st.text_input("Academic Course / Program:") 
-            with c2:
-                n_rfid = st.text_input("RFID UID (Scan on Pi first):")
-                # Support for alphanumeric tokens
+                n_course = st.text_input("Academic Program (Manual Input):") 
+            with col2:
+                n_rfid = st.text_input("RFID UID (Optional for Profile Creation):")
                 n_fpid = st.text_input("Biometric Token (Alphanumeric):")
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-            # Logic: Conflict check before registration
-            existing_fpids = [v.get('fingerprint_id') for v in cards_data.values()] if isinstance(cards_data, dict) else []
-            if n_fpid in existing_fpids:
-                st.error(f"⚠️ Conflict: Biometric Token '{n_fpid}' is already occupied!")
-
-            if st.form_submit_button("Sync Profile to Cloud"):
-                if n_id and n_rfid and n_fpid not in existing_fpids:
-                    # Double-node synchronization for admin and hardware mapping
+            if st.form_submit_button("Finalize Cloud Registration"):
+                if n_id and n_name:
+                    # 1. Update Master Student Node (Primary Source)
                     db.reference(f'/students/{n_id}').update({
-                        "student_id": n_id, "name": n_name, "rfid": n_rfid, 
+                        "student_id": n_id, "name": n_name, "rfid": n_rfid if n_rfid else "Unlinked", 
                         "course": n_course, "attendance_count": 0, "registered_date": n_date
                     })
-                    db.reference('/cards').push().set({
-                        "student_id": n_id, "name": n_name, "card_id": n_rfid, 
-                        "course": n_course, "fingerprint_id": n_fpid, "registered_date": n_date
-                    })
-                    st.success(f"Profile {n_id} established!"); st.rerun()
+                    # 2. Update Hardware Mapping Node (Secondary Source)
+                    if n_rfid and n_fpid:
+                        db.reference('/cards').push().set({
+                            "student_id": n_id, "name": n_name, "card_id": n_rfid, 
+                            "course": n_course, "fingerprint_id": n_fpid, "registered_date": n_date
+                        })
+                    st.success(f"Profile {n_id} successfully established!"); st.rerun()
 
     with tab_list:
-        if cards_data:
-            # Defensive reindexing to handle new/empty database columns
-            reg_df = pd.DataFrame(list(cards_data.values()))
-            reg_df = reg_df.reindex(columns=['student_id', 'name', 'course', 'card_id', 'fingerprint_id']).fillna("N/A")
-            st.subheader("Master Student List (Sorted by ID)")
+        # LOGICAL FIX: Merge /students and /cards to show ALL registered users
+        if students_data:
+            master_registry = []
+            for sid, info in students_data.items():
+                # Find matching biometric info from cards node
+                card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {}) if isinstance(cards_raw, dict) else {}
+                master_registry.append({
+                    "student_id": sid,
+                    "name": info.get('name', 'N/A'),
+                    "course": info.get('course', 'N/A'),
+                    "card_id": info.get('rfid', 'Unlinked'),
+                    "fingerprint_id": card_info.get('fingerprint_id', 'N/A')
+                })
+            
+            reg_df = pd.DataFrame(master_registry)
+            st.subheader("Master Student Registry (Sorted by ID)")
             st.dataframe(reg_df.sort_values("student_id"), use_container_width=True)
             
-            # Profile Deletion Logic
             st.markdown("---")
-            del_id = st.selectbox("Select Student ID to remove:", sorted(students_data.keys()))
+            del_id = st.selectbox("Select Student to remove:", sorted(students_data.keys()))
             if st.button("🗑️ Permanently Delete Student"):
                 db.reference(f'/students/{del_id}').delete()
-                st.warning(f"Profile {del_id} erased from cloud."); st.rerun()
+                st.warning(f"Profile {del_id} erased from cloud database."); st.rerun()
+        else:
+            st.info("No students registered in the database.")
 
 else:
-    # --- ATTENDANCE MODE: MONITORING & MODULE 3 ANALYTICS ---
+    # --- ATTENDANCE MODE: MONITORING & DATA VISUALIZATION ---
     tab_live, tab_m3 = st.tabs(["📺 Live Monitoring", "📊 Module 3: Reporting & Visualization"])
     
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Logs")
         if not df_all.empty:
-            # Business Rule Validation: Show flow_type and verification_method
             st.dataframe(df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']]
                          .sort_values('formatted_time', ascending=False), use_container_width=True)
-        else: st.info("Hardware active. Waiting for entries...")
+        else: st.info("Waiting for hardware synchronization...")
 
     with tab_m3:
         st.header("📈 Advanced Analytics (Module 3 Compliance)")
         
         if not df_all.empty:
-            # 4.1 STAY DURATION CALCULATION logic
+            # 4.1 STAY DURATION CALCULATION (Internal Web App Logic)
             st.subheader("⏱️ Daily Attendance Duration Analysis")
             duration_data = []
             today_str = datetime.now().strftime("%Y-%m-%d")
@@ -165,36 +167,34 @@ else:
             for sid in students_data.keys():
                 personal_today = df_all[(df_all['student_id'] == sid) & (df_all['record_date'] == today_str)].sort_values('dt_obj')
                 if len(personal_today) >= 2:
-                    # Logic: Sequence detection (1st scan vs Last scan)
                     start, end = personal_today.iloc[0]['dt_obj'], personal_today.iloc[-1]['dt_obj']
-                    hrs = round((end - start).total_seconds() / 3600, 2)
+                    diff = end - start
+                    hrs = round(diff.total_seconds() / 3600, 2)
                     duration_data.append({"ID": sid, "Name": students_data[sid].get('name'), "Duration_Hrs": hrs})
             
             if duration_data:
                 viz_df = pd.DataFrame(duration_data)
-                st.table(viz_df)
-                
-                # --- DATA VISUALIZATION 1: STAY DURATION BAR CHART ---
-                st.subheader("Stay Duration Visualization")
+                # --- VIZ 1: STAY DURATION BAR CHART ---
+                st.subheader("Duration Visualization (Hrs per Student)")
                 fig_dur, ax_dur = plt.subplots(figsize=(10, 4))
                 sns.barplot(x="ID", y="Duration_Hrs", data=viz_df, palette="viridis", ax=ax_dur)
                 st.pyplot(fig_dur)
             else:
-                st.info("Insufficient data for duration analysis (Requires Check-in & Leave scans).")
+                st.info("Requires both Check-in and Leave scans to calculate duration.")
 
             st.markdown("---")
-            # 4.2 STATUS DISTRIBUTION & MANUAL ADJUSTMENT
+            # 4.2 STATUS DISTRIBUTION & MANUAL MGMT
             c_pie, c_ops = st.columns([1, 1])
             with c_pie:
-                # --- DATA VISUALIZATION 2: STATUS PIE CHART ---
+                # --- VIZ 2: STATUS PIE CHART ---
                 st.subheader("Overall Status Distribution")
                 status_counts = df_all['status'].value_counts()
                 fig_pie, ax_pie = plt.subplots()
-                ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c'])
+                ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', startangle=90, colors=['#2ecc71', '#f1c40f', '#e74c3c'])
                 st.pyplot(fig_pie)
                 
             with c_ops:
-                st.subheader("📝 Manual Record Adjustment")
+                st.subheader("📝 Manual Record Management")
                 with st.form("manual_adj"):
                     m_sid = st.selectbox("Select Student:", list(students_data.keys()))
                     m_status = st.selectbox("Set Adjustment:", ["present", "absent (Medical Leave)", "absent"])
@@ -206,11 +206,11 @@ else:
                             'verification_method': "Manual_Admin_Adjustment"
                         }); st.rerun()
                 
-                # FEATURE: LOG DELETION
+                # LOG DELETION
                 st.markdown("---")
                 log_labels = df_all['formatted_time'] + " | " + df_all['name']
                 to_del = st.selectbox("Erase specific attendance entry:", log_labels.tolist())
-                if st.button("🗑️ Confirm Erase Entry"):
+                if st.button("🗑️ Confirm Erase"):
                     path = df_all[log_labels == to_del]['firebase_path'].values[0]
                     db.reference(f'/attendance/{path}').delete(); st.rerun()
 
@@ -222,5 +222,5 @@ else:
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 export_df.to_excel(writer, index=False, sheet_name='Logs')
                 writer.close()
-            st.download_button(label="📥 Download Official Report (.xlsx)", data=buffer.getvalue(), 
+            st.download_button(label="📥 Download Excel Sync (.xlsx)", data=buffer.getvalue(), 
                                file_name=f"Report_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.ms-excel")
