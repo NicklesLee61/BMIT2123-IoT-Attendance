@@ -247,15 +247,18 @@ else:
         st.subheader("📋 Real-time Smart Attendance Feed")
         
         if not df_all.empty:
-            # 🚀 UPGRADED: Added a Date Filter to select which day to view
-            selected_date = st.date_input("📅 Filter by Date:", datetime.now())
-            selected_date_str = selected_date.strftime("%Y-%m-%d")
+            # 🚀 UPGRADED UI: Control Panel for Date and Search
+            ctrl_col1, ctrl_col2 = st.columns(2)
+            with ctrl_col1:
+                selected_date = st.date_input("📅 Filter by Date:", datetime.now())
+                selected_date_str = selected_date.strftime("%Y-%m-%d")
+            with ctrl_col2:
+                search_log = st.text_input("🔍 Search Record (by ID or Name):", placeholder="e.g. 2413458, Sakiko...")
             
-            # 🚀 UPGRADED: Filter data specifically for the chosen date
             view_df = df_all[df_all['record_date'] == selected_date_str]
             
             if not view_df.empty:
-                # Calculate KPIs based ONLY on the selected date's data
+                # KPI logic remains based on the whole class for that specific day
                 latest_daily = view_df.drop_duplicates(subset=['student_id'], keep='last')
                 present_count = len(latest_daily[latest_daily['status'] == 'present'])
                 absent_count = len(latest_daily[latest_daily['status'].astype(str).str.contains('absent', case=False)])
@@ -263,7 +266,6 @@ else:
                 leave_count = len(latest_daily[latest_daily['status'] == 'leave'])
                 
                 k1, k2, k3, k4 = st.columns(4)
-                # Display metrics without "Today" since it can be past dates
                 k1.metric("🟢 Present", present_count)
                 k2.metric("🔴 Absent", absent_count)
                 k3.metric("🟠 Late", late_count)
@@ -272,13 +274,22 @@ else:
                 st.markdown("---") 
 
                 display_df = view_df[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
-                    
-                display_df['status'] = display_df['status'].apply(display_status_emoji)
-                display_df['flow_type'] = display_df['flow_type'].apply(display_flow_emoji)
                 
-                display_df = display_df.reset_index(drop=True)
-                display_df.index = display_df.index + 1
-                st.dataframe(display_df, use_container_width=True)
+                # 🚀 NEW: Apply the search filter to the table if the user typed something
+                if search_log:
+                    search_cols = ['student_id', 'name']
+                    mask = display_df[search_cols].apply(lambda row: row.astype(str).str.contains(search_log, case=False).any(), axis=1)
+                    display_df = display_df[mask]
+                
+                if not display_df.empty:
+                    display_df['status'] = display_df['status'].apply(display_status_emoji)
+                    display_df['flow_type'] = display_df['flow_type'].apply(display_flow_emoji)
+                    
+                    display_df = display_df.reset_index(drop=True)
+                    display_df.index = display_df.index + 1
+                    st.dataframe(display_df, use_container_width=True)
+                else:
+                    st.warning(f"No records found matching '{search_log}' on {selected_date_str}.")
             else:
                 st.info(f"No attendance records found for {selected_date_str}.")
         else: 
