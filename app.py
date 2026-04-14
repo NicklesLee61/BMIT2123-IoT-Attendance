@@ -1,267 +1,155 @@
-import streamlit as st
-import pandas as pd
+import RPi.GPIO as GPIO
+from mfrc522 import SimpleMFRC522
+from adafruit_fingerprint import Adafruit_Fingerprint
+from RPLCD.i2c import CharLCD
+import serial
+import time
 import firebase_admin
 from firebase_admin import credentials, db
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, time as dt_time
-import time
-import io
+from datetime import datetime
 
 # ==========================================================
-# 1. SYSTEM INITIALIZATION & SECURE CLOUD AUTHENTICATION
+# 1. HARDWARE PIN MAPPING (Based on your Configuration Table)
 # ==========================================================
-st.set_page_config(page_title="IoT Master Command", layout="wide", page_icon="🛡️")
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
 
-# Initialize Firebase with Streamlit Secrets for cloud deployment
-if not firebase_admin._apps:
-    try:
-        if "firebase" in st.secrets:
-            # Production environment: Fetch credentials from Streamlit Cloud
-            cred_dict = dict(st.secrets["firebase"])
-            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
-            cred = credentials.Certificate(cred_dict)
-        else:
-            # Local development fallback
-            cred = credentials.Certificate("service-account-key.json")
-            
-        firebase_admin.initialize_app(cred, {
-            'databaseURL': 'https://bmit2123-iot-71ac4-default-rtdb.asia-southeast1.firebasedatabase.app'
-        })
-    except Exception as e:
-        st.error(f"Database Initialization Failed: {e}"); st.stop()
+# Grove Buzzer (D5 on Grove Base Hat -> BCM 5)
+BUZZER_PIN = 5  
+# LEDs (PIN 16 -> BCM 23, PIN 18 -> BCM 24)
+LED_GREEN = 23
+LED_RED = 24
+
+GPIO.setup(BUZZER_PIN, GPIO.OUT)
+GPIO.setup(LED_GREEN, GPIO.OUT)
+GPIO.setup(LED_RED, GPIO.OUT)
+
+# Initialize Hardware Modules
+rfid = SimpleMFRC522()
+lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=16, rows=2, dotsize=8)
+uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1) # AS608 Fingerprint
+finger = Adafruit_Fingerprint(uart)
 
 # ==========================================================
-# 2. DATA ENGINE: SMART PROCESSING & DURATION LOGIC
+# 2. FIREBASE CLOUD CONFIGURATION
 # ==========================================================
-# Fetch current hardware state and primary database nodes
+cred = credentials.Certificate("service-account-key.json")
+firebase_admin.initialize_app(cred, {
+    'databaseURL': 'https://bmit2123-iot-71ac4-default-rtdb.asia-southeast1.firebasedatabase.app'
+})
+
 control_ref = db.reference('/control')
-hw_state = control_ref.get() or {"mode": "Attendance", "is_locked": False}
-current_hw_mode = hw_state.get('mode', 'Attendance')
+cards_ref = db.reference('/cards')
 
-students_data = db.reference('/students').get() or {} 
-cards_raw = db.reference('/cards').get() or {}       
-attendance_raw = db.reference('/attendance').get() or {}
-
-# Process raw logs for identification and duration calculation
-all_records = []
-if attendance_raw:
-    for date_key, daily_data in attendance_raw.items():
-        if isinstance(daily_data, dict):
-            for rec_id, info in daily_data.items():
-                info['firebase_path'] = f"{date_key}/{rec_id}"
-                info['record_date'] = date_key
-                all_records.append(info)
-
-df_all = pd.DataFrame(all_records)
-if not df_all.empty:
-    # Logic: Convert unix timestamps for calculations
-    df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
-    df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Logic: Identify tap sequence (1st = Check-in, >=2nd = Leave)
-    df_all = df_all.sort_values('dt_obj')
-    df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
-    df_all['flow_type'] = df_all['tap_rank'].apply(lambda x: "Check-in" if x == 1 else "Leave")
+system_state = {"mode": "Attendance", "is_locked": False}
 
 # ==========================================================
-# 3. SIDEBAR: REMOTE HARDWARE COMMAND CENTER
+# 3. HARDWARE FEEDBACK FUNCTIONS (LCD, LED, Buzzer)
 # ==========================================================
-st.sidebar.title("🎮 Master Control Center")
-st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
+def display_lcd(line1, line2=""):
+    lcd.clear()
+    lcd.write_string(line1)
+    if line2:
+        lcd.crlf()
+        lcd.write_string(line2)
 
-with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
-    # Mode selection: Enrollment vs Attendance
-    target_mode = st.selectbox("Switch Mode:", ["Attendance", "Enrollment"], 
-                               index=0 if current_hw_mode == "Attendance" else 1)
-    if st.sidebar.button("Apply Mode Update"):
-        control_ref.update({"mode": target_mode})
-        st.rerun()
+def feedback(status):
+    if status == "success":
+        GPIO.output(LED_GREEN, GPIO.HIGH)
+        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        time.sleep(0.2)
+        GPIO.output(BUZZER_PIN, GPIO.LOW)
+        time.sleep(0.8)
+        GPIO.output(LED_GREEN, GPIO.LOW)
+    elif status == "error":
+        GPIO.output(LED_RED, GPIO.HIGH)
+        for _ in range(3): # 3 quick beeps for error
+            GPIO.output(BUZZER_PIN, GPIO.HIGH)
+            time.sleep(0.1)
+            GPIO.output(BUZZER_PIN, GPIO.LOW)
+            time.sleep(0.1)
+        GPIO.output(LED_RED, GPIO.LOW)
 
-    st.markdown("---")
-    
-    if st.sidebar.button("🔔 Trigger Remote Buzzer"):
-        # Set to True to alert the hardware
-        control_ref.update({"trigger_buzzer": True})
-        # Wait for 1 second so the Pi has time to catch the signal
-        time.sleep(1) 
-        # Set back to False to stop the buzzer
-        control_ref.update({"trigger_buzzer": False})
-        st.sidebar.success("Buzzer signal sent!")
-        
-    # Global lockdown toggle
-    is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
-    control_ref.update({"is_locked": is_locked})
-
-# --- NEW: ADVANCED HARDWARE MAINTENANCE MODULE ---
-with st.sidebar.expander("🛠️ Advanced Hardware Maintenance", expanded=False):
-    
-    # Feature A: Clear Sensor's Fingerprint Library
-    st.markdown("⚠️ **DANGER ZONE**")
-    if st.button("🗑️ Erase All Fingerprints"):
-        # Send execution command to the Firebase control node
-        control_ref.update({"clear_all_fp": True})
-        st.toast("Erase command sent. Check hardware feedback...")
-    
-    st.markdown("---")
-    
-    # Feature B: Query Stored Hardware IDs
-    if st.button("🔍 Query Stored FP IDs"):
-        # Send request flag to fetch stored IDs from the sensor
-        control_ref.update({"request_id_list": True})
-        st.toast("Requesting hardware data...")
-
-    # Fetch and display the query results from the new Firebase status node
-    fp_status = db.reference('/system_status/fp_ids').get()
-    if fp_status:
-        st.info(f"Currently Occupied FP IDs: \n{fp_status}")
+def log_attendance(student_id, name):
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    db.reference(f'/attendance/{date_str}').push().set({
+        'student_id': student_id,
+        'name': name,
+        'status': "present",
+        'timestamp': int(time.time()),
+        'verification_method': "RFID_Fingerprint_2FA"
+    })
+    print(f"✅ Logged: {name}")
 
 # ==========================================================
-# 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
+# 4. CLOUD LISTENER (Responds to your Streamlit App)
 # ==========================================================
-st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
+def on_control_change(event):
+    global system_state
+    if event.data:
+        if event.path == "/trigger_buzzer" and event.data is True:
+            display_lcd("Remote Alert!", "Buzzer Triggered")
+            feedback("error") # Use error beep pattern for alert
+        if isinstance(event.data, dict):
+            system_state["mode"] = event.data.get("mode", system_state["mode"])
+            system_state["is_locked"] = event.data.get("is_locked", system_state["is_locked"])
+            display_lcd(f"Mode: {system_state['mode']}")
 
-if current_hw_mode == "Enrollment":
-    # --- ENROLLMENT MODE: REGISTRY & PROFILE MGMT ---
-    tab_reg, tab_list = st.tabs(["➕ Student Registration", "🗃️ Master Registry"])
+control_ref.listen(on_control_change)
+
+# ==========================================================
+# 5. MAIN 2FA LOOP (RFID -> Fingerprint)
+# ==========================================================
+try:
+    display_lcd("IoT System", "Starting...")
+    time.sleep(2)
     
-    with tab_reg:
-        st.subheader("Student Personal Information Registry")
-        with st.form("enroll_form"):
-            c1, c2 = st.columns(2)
-            with c1:
-                n_id = st.text_input("Student ID (Unique):")
-                n_name = st.text_input("Full Name:")
-                n_course = st.text_input("Academic Program (Manual Input):") 
-            with c2:
-                n_rfid = st.text_input("RFID UID (Optional):")
-                n_fpid = st.text_input("Biometric Token (Alphanumeric):")
-                n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    while True:
+        if system_state["is_locked"]:
+            display_lcd("SYSTEM LOCKED", "See Admin")
+            time.sleep(2)
+            continue
 
-            # Conflict check for fingerprint slot
-            existing_fpids = [v.get('fingerprint_id') for v in cards_raw.values()] if isinstance(cards_raw, dict) else []
-            if n_fpid and n_fpid in existing_fpids:
-                st.error(f"⚠️ Biometric ID '{n_fpid}' is already occupied!")
-
-            if st.form_submit_button("Finalize Cloud Registration"):
-                if n_id and n_name:
-                    # Sync to /students as primary record
-                    db.reference(f'/students/{n_id}').update({
-                        "student_id": n_id, "name": n_name, "rfid": n_rfid if n_rfid else "Unlinked", 
-                        "course": n_course, "attendance_count": 0, "registered_date": n_date
-                    })
-                    # Sync to /cards only if hardware data is provided
-                    if n_rfid and n_fpid and n_fpid not in existing_fpids:
-                        db.reference('/cards').push().set({
-                            "student_id": n_id, "name": n_name, "card_id": n_rfid, 
-                            "course": n_course, "fingerprint_id": n_fpid, "registered_date": n_date
-                        })
-                    st.success(f"Profile {n_id} established!"); st.rerun()
-
-    with tab_list:
-        # LOGICAL FIX: Pull from /students to show ALL users immediately
-        if students_data:
-            master_registry = []
-            for sid, info in students_data.items():
-                card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {}) if isinstance(cards_raw, dict) else {}
-                master_registry.append({
-                    "student_id": sid, "name": info.get('name', 'N/A'), "course": info.get('course', 'N/A'),
-                    "card_id": info.get('rfid', 'Unlinked'), "fingerprint_id": card_info.get('fingerprint_id', 'N/A')
-                })
-            reg_df = pd.DataFrame(master_registry)
-            st.subheader("Master Student Registry (Sorted by ID)")
-            st.dataframe(reg_df.sort_values("student_id"), use_container_width=True)
+        if system_state["mode"] == "Attendance":
+            display_lcd("Scan RFID Card", "To Check-In/Out")
+            card_id, _ = rfid.read()
+            card_id = str(card_id).strip()
+            display_lcd("Card Detected", "Validating...")
             
-            st.markdown("---")
-            del_id = st.selectbox("Select Student Profile to remove:", sorted(students_data.keys()))
-            if st.button("🗑️ Permanently Delete Student Profile"):
-                db.reference(f'/students/{del_id}').delete()
-                st.warning(f"Profile {del_id} erased from cloud database."); st.rerun()
-
-else:
-    # --- ATTENDANCE MODE: MONITORING, MANAGEMENT & ANALYTICS ---
-    tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
-    
-    with tab_live:
-        st.subheader("📋 Real-time Smart Attendance Feed")
-        if not df_all.empty:
-            # Displays smart flow_type to satisfy Check-in/Leave logic
-            st.dataframe(df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']]
-                         .sort_values('formatted_time', ascending=False), use_container_width=True)
-        else: st.info("Waiting for hardware synchronization...")
-
-    with tab_console:
-        # FEATURE: MANUALLY ADD/EDIT/DELETE LOGS REGARDLESS OF SCAN
-        st.header("🛠️ Attendance Management Console")
-        c_add, c_mod = st.columns(2)
-        
-        with c_add:
-            st.subheader("➕ Create Manual Record")
-            with st.form("force_add_form"):
-                m_sid = st.selectbox("Target Profile:", sorted(students_data.keys()))
-                m_date = st.date_input("Date:", datetime.now())
-                m_time = st.time_input("Time:", dt_time(9, 0))
-                m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)"])
-                if st.form_submit_button("Force Sync Record"):
-                    dt_combined = datetime.combine(m_date, m_time)
-                    unix_ts = int(dt_combined.timestamp())
-                    date_key = m_date.strftime("%Y-%m-%d")
-                    db.reference(f'/attendance/{date_key}').push().set({
-                        'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
-                        'status': m_status, 'timestamp': unix_ts, 'verification_method': "Manual_Admin_Creation"
-                    })
-                    st.success("Record created!"); st.rerun()
-
-        with c_mod:
-            st.subheader("📝 Modify or Delete Entries")
-            if not df_all.empty:
-                log_labels = df_all['formatted_time'] + " | " + df_all['name'] + " (" + df_all['status'] + ")"
-                to_manage = st.selectbox("Select Entry:", log_labels.tolist())
-                row = df_all[log_labels == to_manage].iloc[0]
-                
-                with st.expander("Update Status"):
-                    new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)"])
-                    if st.button("Update This Specific Entry"):
-                        db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
-                        st.success("Record updated!"); st.rerun()
-                
-                if st.button("🗑️ Permanently Delete This Entry", key="del_entry"):
-                    db.reference(f'/attendance/{row["firebase_path"]}').delete()
-                    st.warning("Entry removed."); st.rerun()
-
-    with tab_m3:
-        # MODULE 3 ANALYTICS: Visualizations as per assignment rules
-        st.header("📊 Module 3: Advanced Analytics Interface")
-        if not df_all.empty:
-            # 4.1 STAY DURATION BAR CHART
-            st.subheader("⏱️ Daily Attendance Duration Analysis")
-            duration_data = []
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            for sid in students_data.keys():
-                p_today = df_all[(df_all['student_id'] == sid) & (df_all['record_date'] == today_str)].sort_values('dt_obj')
-                if len(p_today) >= 2:
-                    # Duration Logic: Last tap - First tap of the day
-                    hrs = round((p_today.iloc[-1]['dt_obj'] - p_today.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
-                    duration_data.append({"ID": sid, "Name": students_data[sid].get('name'), "Duration_Hrs": hrs})
+            # 1. Validate RFID
+            all_cards = cards_ref.get() or {}
+            match = next((v for v in all_cards.values() if v.get('card_id') == card_id), None)
             
-            if duration_data:
-                viz_df = pd.DataFrame(duration_data)
-                fig_dur, ax_dur = plt.subplots(figsize=(10, 4))
-                sns.barplot(x="ID", y="Duration_Hrs", data=viz_df, palette="viridis", ax=ax_dur)
-                st.pyplot(fig_dur)
-            else: st.info("Requires both Check-in & Leave scans for duration plotting.")
+            if match:
+                display_lcd(f"Hi {match['name'][:10]}", "Place Finger...")
+                time.sleep(1)
+                
+                # 2. Trigger Fingerprint Verification
+                if finger.get_image() == 0x00 and finger.image_2_tz(1) == 0x00 and finger.finger_search() == 0x00:
+                    if str(finger.finger_id) == str(match.get('fingerprint_id')):
+                        display_lcd("Access Granted", "Logged to Cloud")
+                        feedback("success")
+                        log_attendance(match['student_id'], match['name'])
+                    else:
+                        display_lcd("FP Mismatch!", "Access Denied")
+                        feedback("error")
+                else:
+                    display_lcd("FP Error", "Try Again")
+                    feedback("error")
+            else:
+                display_lcd("Unknown Card!", "Access Denied")
+                feedback("error")
+            
+            time.sleep(2) # Cooldown before next scan
 
-            # 4.2 STATUS DISTRIBUTION PIE CHART
-            st.subheader("Lecture Status Distribution")
-            status_counts = df_all['status'].value_counts()
-            fig_pie, ax_pie = plt.subplots()
-            ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c'])
-            st.pyplot(fig_pie)
+        elif system_state["mode"] == "Enrollment":
+            display_lcd("Enrollment Mode", "Scan New Card")
+            card_id, _ = rfid.read()
+            display_lcd("Card UID:", str(card_id))
+            feedback("success")
+            print(f"✨ Copy this UID to Web App: {card_id}")
+            time.sleep(3)
 
-            st.markdown("---")
-            # 4.3 PERMANENT RECORD BRIDGE (Excel archival)
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df_all[['formatted_time', 'name', 'student_id', 'status', 'verification_method']].to_excel(writer, index=False)
-                writer.close()
-            st.download_button("📥 Download Official Report (.xlsx)", data=buffer.getvalue(), file_name="Report.xlsx", mime="application/vnd.ms-excel")
+except KeyboardInterrupt:
+    display_lcd("System Offline", "")
+    GPIO.cleanup()
