@@ -19,7 +19,6 @@ if not firebase_admin._apps:
         if "firebase" in st.secrets:
             # Production: Fetch credentials from Streamlit Cloud Secrets
             cred_dict = dict(st.secrets["firebase"])
-            # Essential: Handle the newline character in the private key
             cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(cred_dict)
         else:
@@ -33,7 +32,7 @@ if not firebase_admin._apps:
         st.error(f"Cloud Connection Failed: {e}"); st.stop()
 
 # ==========================================================
-# 2. DATA PROCESSING ENGINE: FETCHING & FLATTENING
+# 2. DATA ENGINE: FETCHING & PROCESSING
 # ==========================================================
 # Fetching primary nodes from Firebase
 students_data = db.reference('/students').get() or {} 
@@ -43,7 +42,6 @@ attendance_raw = db.reference('/attendance').get() or {}
 # Process Nested Attendance Logs into a flat list
 all_records = []
 if attendance_raw:
-    # Structure: { "date": { "record_id": {data} } }
     for date_key, daily_data in attendance_raw.items():
         if isinstance(daily_data, dict):
             for record_id, info in daily_data.items():
@@ -53,7 +51,6 @@ if attendance_raw:
 
 df_attendance = pd.DataFrame(all_records)
 if not df_attendance.empty:
-    # Convert Unix Epoch integer to human-readable Datetime
     df_attendance['timestamp'] = pd.to_datetime(df_attendance['timestamp'], unit='s', errors='coerce')
 
 # ==========================================================
@@ -71,11 +68,10 @@ with st.sidebar.expander("🛠️ Hardware Controls", expanded=False):
     is_locked = st.toggle("🔒 Emergency Device Lock")
     db.reference('/control/is_locked').set(is_locked)
     
-    # Remote trigger for Raspberry Pi buzzer
+    # Remote buzzer trigger
     if st.button("🔔 Trigger Remote Bell"):
         db.reference('/control/trigger_buzzer').set(True)
-        time.sleep(1) 
-        db.reference('/control/trigger_buzzer').set(False)
+        time.sleep(1); db.reference('/control/trigger_buzzer').set(False)
 
 # ==========================================================
 # 4. MAIN INTERFACE: PROFESSIONAL TABS SYSTEM
@@ -86,21 +82,20 @@ tab_monitor, tab_registry, tab_module3 = st.tabs([
     "📊 Module 3: Analytics & Reporting"
 ])
 
-# --- TAB 1: LIVE MONITORING (Real-time Validation) ---
+# --- TAB 1: LIVE MONITORING (Validation View) ---
 with tab_monitor:
-    st.subheader("📋 Real-time Logs (Business Rule Validation)")
+    st.subheader("📋 Real-time Logs (Business Rule Validation Check)")
     if not df_attendance.empty:
         # Display logs with verification method for validation
         st.dataframe(df_attendance[['timestamp', 'name', 'status', 'student_id', 'verification_method']]
                      .sort_values(by='timestamp', ascending=False), use_container_width=True)
     else: st.info("Waiting for hardware synchronization...")
 
-# --- TAB 2: REGISTRY MANAGEMENT (Student ID Sorting) ---
+# --- TAB 2: REGISTRY MGMT (Sorted by Student ID) ---
 with tab_registry:
-    st.header("🗃️ Unified Biometric Registry")
+    st.header("🗃️ Student Biometric Registry")
     
     if cards_data:
-        # Combined display of hardware and software metadata
         reg_list = []
         for card_uid, val in cards_data.items():
             reg_list.append({
@@ -113,12 +108,10 @@ with tab_registry:
         
         # LOGIC: Strict sorting by Student ID for better accessibility
         reg_df = pd.DataFrame(reg_list).sort_values(by="Student ID")
-        st.subheader("Master List (Sorted by Student ID)")
         st.dataframe(reg_df, use_container_width=True)
 
         st.markdown("---")
-        # Enrollment Section
-        with st.expander("➕ Enroll / Update Student Entry"):
+        with st.expander("➕ Enroll / Update Student Mapping"):
             with st.form("enroll_form"):
                 n_id = st.text_input("Student ID (e.g., 24WMR15298):")
                 n_name = st.text_input("Name:")
@@ -138,7 +131,7 @@ with tab_registry:
                         })
                         st.success(f"Profile {n_id} updated successfully!"); st.rerun()
 
-# --- TAB 3: DATA ANALYTICS & REPORTING (Module 3 Requirements) ---
+# --- TAB 3: DATA ANALYTICS & REPORTING (Module 3) ---
 with tab_module3:
     st.header("📊 Module 3: Advanced Reporting Interface")
     
@@ -153,7 +146,6 @@ with tab_module3:
             st.pyplot(fig)
         
         with col_summary:
-            # Frequent Absenteeism Analysis
             st.subheader("🚩 Today's Absence Alert")
             today = datetime.now().strftime("%Y-%m-%d")
             all_uids = set(students_data.keys())
@@ -174,25 +166,25 @@ with tab_module3:
                 db.reference(f'/attendance/{t_str}').push().set({
                     'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
                     'status': m_status, 'timestamp': int(time.time()), 'date': t_str,
-                    'verification_method': "Admin_Manual_Correction"
+                    'verification_method': "Manual_Override"
                 }); st.success(f"Report adjusted for {m_sid}"); st.rerun()
 
         st.markdown("---")
         
-        # 3.3 Permanent Record-Keeping: Firebase to Excel Sync
-        st.subheader("💾 Data Export & Permanent Record-Keeping")
-        st.write("Sync latest Firebase cloud data to a formatted Excel report.")
+        # 3.3 Data Export: Sync to Excel
+        st.subheader("💾 Permanent Record-Keeping (Excel Sync)")
         
         buffer = io.BytesIO()
+        # Ensure 'xlsxwriter' is in requirements.txt to fix the error
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df_attendance[['timestamp', 'name', 'student_id', 'status', 'verification_method']].to_excel(writer, index=False, sheet_name='Attendance_Report')
+            df_attendance[['timestamp', 'name', 'student_id', 'status', 'verification_method']].to_excel(writer, index=False, sheet_name='Attendance_Logs')
             writer.close()
         
         st.download_button(
-            label="📥 Download Official Report (.xlsx)",
+            label="📥 Download Attendance Official Report (.xlsx)",
             data=buffer.getvalue(),
-            file_name=f"Attendance_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            file_name=f"Attendance_Sync_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.ms-excel"
         )
     else:
-        st.info("Insufficient attendance data for reporting. Sync hardware sensors to proceed.")
+        st.info("Insufficient data for analysis. Please ensure hardware is syncing logs.")
