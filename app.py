@@ -77,7 +77,17 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
     if st.sidebar.button("Apply Mode Update"):
         control_ref.update({"mode": target_mode})
         st.rerun()
-    
+
+    st.markdown("---")
+    if st.sidebar.button("🔔 Trigger Remote Buzzer"):
+        # Set to True to alert the hardware
+        control_ref.update({"trigger_buzzer": True})
+        # Wait for 1 second so the Pi has time to catch the signal
+        time.sleep(1) 
+        # Set back to False to stop the buzzer
+        control_ref.update({"trigger_buzzer": False})
+        st.sidebar.success("Buzzer signal sent!")
+        
     # Global lockdown toggle
     is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
     control_ref.update({"is_locked": is_locked})
