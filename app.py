@@ -49,7 +49,7 @@ if isinstance(cards_raw, dict):
                 "student_id": sid
             }
 
-# 🚀 Universal display mapping -> "Name (ID)" : "ID"
+# Universal display mapping -> "Name (ID)" : "ID"
 profile_mapping = {}
 for sid, info in students_data.items():
     display_name = f"{info.get('name', 'Unknown')} ({sid})"
@@ -126,25 +126,20 @@ if current_hw_mode == "Enrollment":
 
             if st.form_submit_button("Finalize Registration / Update"):
                 if n_id:
-                    # 🚀 BUG FIX: Smart Data Preservation
-                    # Fetch existing data so we don't overwrite with blanks
                     exist_stu = students_data.get(n_id, {})
                     exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
                     exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
 
-                    # Only update if user typed something new; otherwise keep old data
                     final_name = n_name if n_name else exist_stu.get('name', 'Unknown')
                     final_course = n_course if n_course else exist_stu.get('course', 'Unknown')
                     final_rfid = n_rfid if n_rfid else exist_card.get('card_id', 'Unlinked')
                     final_fpid = n_fpid if n_fpid else exist_card.get('fingerprint_id', 'Unlinked')
 
-                    # 1. Update /students
                     db.reference(f'/students/{n_id}').update({
                         "student_id": n_id, "name": final_name, "rfid": final_rfid, 
                         "course": final_course, "registered_date": n_date
                     })
 
-                    # 2. Update /cards
                     card_payload = {
                         "student_id": n_id, "name": final_name, "card_id": final_rfid, 
                         "course": final_course, "fingerprint_id": final_fpid, "registered_date": n_date
@@ -152,7 +147,6 @@ if current_hw_mode == "Enrollment":
                     if exist_card_key:
                         db.reference(f'/cards/{exist_card_key}').update(card_payload)
                     else:
-                        # Only create new card record if there's actual hardware data
                         if final_rfid != "Unlinked" or final_fpid != "Unlinked":
                             db.reference('/cards').push().set(card_payload)
                             
@@ -178,7 +172,7 @@ if current_hw_mode == "Enrollment":
                 del_disp = st.selectbox("Select Student Profile to remove:", sorted(profile_mapping.keys()))
                 
                 if st.button("🗑️ Permanently Delete Student Profile"):
-                    del_id = profile_mapping[del_disp] # Map back to real ID
+                    del_id = profile_mapping[del_disp]
                     db.reference(f'/students/{del_id}').delete()
                     card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
                     if card_key:
@@ -211,7 +205,7 @@ if current_hw_mode == "Enrollment":
                 selected_lookup = st.selectbox("Search Profile:", lookup_list, label_visibility="collapsed")
                 
                 if selected_lookup != "-- Select Profile --":
-                    real_sid = profile_mapping[selected_lookup] # Map back to real ID
+                    real_sid = profile_mapping[selected_lookup]
                     c_info = next((v for v in cards_raw.values() if v.get('student_id') == real_sid), None)
                     r_id = c_info.get('card_id', 'Unlinked') if c_info else "No Record"
                     f_id = c_info.get('fingerprint_id', 'Unlinked') if c_info else "No Record"
@@ -222,12 +216,38 @@ else:
     
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
+        
         if not df_all.empty:
+            # 🚀 NEW: TODAY'S KPI METRICS DASHBOARD
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            today_df = df_all[df_all['record_date'] == today_str]
+            
+            if not today_df.empty:
+                # 智能去重：获取今天每个学生“最新”的一条记录状态
+                latest_today = today_df.drop_duplicates(subset=['student_id'], keep='last')
+                present_count = len(latest_today[latest_today['status'] == 'present'])
+                absent_count = len(latest_today[latest_today['status'].astype(str).str.contains('absent', case=False)])
+                late_count = len(latest_today[latest_today['status'] == 'late'])
+                leave_count = len(latest_today[latest_today['status'] == 'leave'])
+            else:
+                present_count = absent_count = late_count = leave_count = 0
+            
+            # 使用四列布局展示漂亮的数据卡片
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("🟢 Present Today", present_count)
+            k2.metric("🔴 Absent Today", absent_count)
+            k3.metric("🟠 Late Today", late_count)
+            k4.metric("🔵 Leave Today", leave_count)
+            
+            st.markdown("---") # 分割线，让排版更舒服
+
+            # 之前的表格展示逻辑
             display_df = df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False)
             display_df = display_df.reset_index(drop=True)
             display_df.index = display_df.index + 1
             st.dataframe(display_df, use_container_width=True)
-        else: st.info("Waiting for hardware synchronization...")
+        else: 
+            st.info("Waiting for hardware synchronization...")
 
     with tab_console:
         st.header("🛠️ Attendance Management Console")
@@ -243,7 +263,7 @@ else:
                     m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
                     
                     if st.form_submit_button("Force Sync Record"):
-                        m_sid = profile_mapping[m_disp] # Map back to real ID
+                        m_sid = profile_mapping[m_disp]
                         dt_combined = datetime.combine(m_date, m_time)
                         unix_ts = int(dt_combined.timestamp())
                         date_key = m_date.strftime("%Y-%m-%d")
