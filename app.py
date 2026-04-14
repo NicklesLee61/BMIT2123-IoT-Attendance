@@ -297,7 +297,6 @@ else:
         if not df_all.empty:
             ctrl_col1, ctrl_col2 = st.columns(2)
             with ctrl_col1:
-                # 这个日历其实是可以用鼠标点击换日期的哦！
                 selected_date = st.date_input("📅 Filter by Date:", datetime.now(), key="live_date")
                 selected_date_str = selected_date.strftime("%Y-%m-%d")
             with ctrl_col2:
@@ -347,49 +346,58 @@ else:
         
         with c_add:
             st.subheader("➕ Create Manual Record")
+            
+            # 🚀 UPGRADED: Added explicit search bar for Target Profile selection
+            search_create = st.text_input("🔍 Search Profile (by ID or Name):", placeholder="e.g. 2413458, Sakiko...", key="search_create_input")
+            
             with st.form("force_add_form"):
-                
                 if profile_mapping:
-                    m_disp = st.selectbox("Target Profile:", sorted(profile_mapping.keys()))
-                    m_date = st.date_input("Date:", datetime.now(), key="manual_add_date")
-                    m_time = st.time_input("Time:", dt_time(9, 0))
+                    create_options = sorted(profile_mapping.keys())
                     
-                    m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
+                    if search_create:
+                        create_options = [p for p in create_options if search_create.lower() in p.lower()]
                     
-                    if st.form_submit_button("Force Sync Record"):
-                        m_sid = profile_mapping[m_disp]
-                        dt_combined = datetime.combine(m_date, m_time)
-                        unix_ts = int(dt_combined.timestamp())
-                        date_key = m_date.strftime("%Y-%m-%d")
-                        db.reference(f'/attendance/{date_key}').push().set({
-                            'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
-                            'status': m_status, 'timestamp': unix_ts, 'verification_method': "Manual_Admin_Creation"
-                        })
-                        st.success("Record created!"); st.rerun()
+                    if create_options:
+                        m_disp = st.selectbox("Target Profile:", create_options)
+                        m_date = st.date_input("Date:", datetime.now(), key="manual_add_date")
+                        m_time = st.time_input("Time:", dt_time(9, 0))
+                        
+                        m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
+                        
+                        if st.form_submit_button("Force Sync Record"):
+                            m_sid = profile_mapping[m_disp]
+                            dt_combined = datetime.combine(m_date, m_time)
+                            unix_ts = int(dt_combined.timestamp())
+                            date_key = m_date.strftime("%Y-%m-%d")
+                            db.reference(f'/attendance/{date_key}').push().set({
+                                'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
+                                'status': m_status, 'timestamp': unix_ts, 'verification_method': "Manual_Admin_Creation"
+                            })
+                            st.success("Record created!"); st.rerun()
+                    else:
+                        st.warning("No student matches your search. Please clear the search box to see all students.")
+                        # Disabled dummy button to maintain form integrity when list is empty
+                        st.form_submit_button("Force Sync Record", disabled=True)
 
         with c_mod:
             st.subheader("📝 Modify or Delete Entries")
             if not df_all.empty:
-                # 🚀 UPGRADED: "View All History" super toggle!
                 st.markdown("##### 🔍 Search Filters")
                 show_all_dates = st.checkbox("🕰️ View All History (Disable Date Filter)")
                 
                 mod_filter_col1, mod_filter_col2 = st.columns(2)
                 with mod_filter_col1:
-                    # Date picker automatically disables if they want to view all history
                     mod_date = st.date_input("Filter by Date:", datetime.now(), key="mod_date_filter", disabled=show_all_dates)
                     mod_date_str = mod_date.strftime("%Y-%m-%d")
                 with mod_filter_col2:
                     filter_options = ["-- All Students --"] + sorted(profile_mapping.keys()) if profile_mapping else ["-- All Students --"]
                     mod_student = st.selectbox("Filter by Student:", filter_options, key="mod_student_filter")
                 
-                # Apply Date Logic
                 if show_all_dates:
-                    filtered_df = df_all.copy() # Load everything!
+                    filtered_df = df_all.copy() 
                 else:
-                    filtered_df = df_all[df_all['record_date'] == mod_date_str] # Load specific date
+                    filtered_df = df_all[df_all['record_date'] == mod_date_str] 
                 
-                # Apply Student Filter
                 if mod_student != "-- All Students --":
                     selected_sid = profile_mapping[mod_student]
                     filtered_df = filtered_df[filtered_df['student_id'] == selected_sid]
