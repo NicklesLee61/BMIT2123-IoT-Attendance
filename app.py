@@ -8,189 +8,161 @@ import time
 import io
 
 # ==========================================================
-# 1. SYSTEM CONFIGURATION & CLOUD AUTHENTICATION
+# 1. SYSTEM INITIALIZATION & SECURE AUTH
 # ==========================================================
 st.set_page_config(page_title="IoT Command Center", layout="wide", page_icon="🛡️")
-st.title("🛡️ BMIT2123: Master Command & Analytics Portal")
 
-# Secure Initialization using Streamlit Secrets
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
-            # Production environment: Cloud Secrets
             cred_dict = dict(st.secrets["firebase"])
             cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(cred_dict)
         else:
-            # Local development environment
             cred = credentials.Certificate("service-account-key.json")
-            
-        firebase_admin.initialize_app(cred, {
-            'databaseURL': 'https://bmit2123-iot-71ac4-default-rtdb.asia-southeast1.firebasedatabase.app'
-        })
+        firebase_admin.initialize_app(cred, {'databaseURL': 'https://bmit2123-iot-71ac4-default-rtdb.asia-southeast1.firebasedatabase.app'})
     except Exception as e:
         st.error(f"Cloud Connection Failed: {e}"); st.stop()
 
 # ==========================================================
-# 2. DATA ENGINE: FETCHING & PROCESSING
+# 2. DATA ENGINE (Real-time Retrieval)
 # ==========================================================
-# Fetching metadata from Firebase
+# Fetch hardware state first to drive UI logic
+control_ref = db.reference('/control')
+hw_state = control_ref.get() or {"mode": "Attendance", "is_locked": False}
+current_hw_mode = hw_state.get('mode', 'Attendance')
+
+# Fetch other data
 students_data = db.reference('/students').get() or {} 
 cards_data = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
-# Process Nested Attendance Logs into a flat list
+# Process Attendance with strict DateTime conversion
 all_records = []
 if attendance_raw:
     for date_key, daily_data in attendance_raw.items():
         if isinstance(daily_data, dict):
-            for record_id, info in daily_data.items():
-                info['firebase_path'] = f"{date_key}/{record_id}"
-                info['record_date'] = date_key
+            for rec_id, info in daily_data.items():
+                info['firebase_path'] = f"{date_key}/{rec_id}"
                 all_records.append(info)
 
-df_attendance = pd.DataFrame(all_records)
-if not df_attendance.empty:
-    df_attendance['timestamp'] = pd.to_datetime(df_attendance['timestamp'], unit='s', errors='coerce')
+df = pd.DataFrame(all_records)
+if not df.empty:
+    # Fix: Ensure timestamp is formatted as STRING for Excel and UI display
+    df['dt_object'] = pd.to_datetime(df['timestamp'], unit='s', errors='coerce')
+    df['formatted_time'] = df['dt_object'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
 # ==========================================================
-# 3. SIDEBAR: REMOTE HARDWARE COMMANDS
+# 3. SIDEBAR: HARDWARE SYNC & MODE CONTROL
 # ==========================================================
-st.sidebar.title("🎮 Command Center")
+st.sidebar.title("🎮 Hardware Master Control")
+st.sidebar.info(f"Current System Mode: **{current_hw_mode}**")
 
-with st.sidebar.expander("🛠️ Hardware Controls", expanded=False):
-    # Remote mode selection for Raspberry Pi
-    sys_mode = st.selectbox("Operation Mode:", ["Attendance", "Enrollment"])
-    if st.button("Apply Mode"): 
-        db.reference('/control/mode').set(sys_mode)
+with st.sidebar.expander("🛠️ Remote Command Panel", expanded=True):
+    # Mode Toggle Logic: Changing this here tells the Raspberry Pi what to do
+    new_mode = st.selectbox("Set Hardware Mode:", ["Attendance", "Enrollment"], 
+                            index=0 if current_hw_mode == "Attendance" else 1)
+    if st.sidebar.button("Push Mode Change"):
+        control_ref.update({"mode": new_mode})
+        st.rerun()
     
-    # Remote system lockdown
-    is_locked = st.toggle("🔒 Emergency Device Lock")
-    db.reference('/control/is_locked').set(is_locked)
-    
-    # Remote bell trigger
-    if st.button("🔔 Trigger Remote Bell"):
-        db.reference('/control/trigger_buzzer').set(True)
-        time.sleep(1); db.reference('/control/trigger_buzzer').set(False)
+    is_locked = st.sidebar.toggle("🔒 Emergency Lockdown", value=hw_state.get('is_locked', False))
+    control_ref.update({"is_locked": is_locked})
 
 # ==========================================================
-# 4. MAIN INTERFACE: PROFESSIONAL TABS SYSTEM
+# 4. DYNAMIC UI BASED ON HARDWARE MODE
 # ==========================================================
-tab_monitor, tab_registry, tab_reporting = st.tabs([
-    "📺 Live Monitoring", 
-    "🗃️ Registry Management", 
-    "📊 Module 3: Analytics & Reporting"
-])
+st.title(f"🛡️ {current_hw_mode} Interface Portal")
 
-# --- TAB 1: LIVE MONITORING (2FA Validation) ---
-with tab_monitor:
-    st.subheader("📋 Real-time Logs (Business Rule Validation)")
-    if not df_attendance.empty:
-        # Display logs with verification_method to ensure validation rules
-        st.dataframe(df_attendance[['timestamp', 'name', 'status', 'student_id', 'verification_method']]
-                     .sort_values(by='timestamp', ascending=False), use_container_width=True)
-    else: st.info("Waiting for hardware synchronization...")
-
-# --- TAB 2: REGISTRY MGMT (Student ID Sorting) ---
-with tab_registry:
-    st.header("🗃️ Unified Student & Biometric Registry")
+if current_hw_mode == "Enrollment":
+    # ENROLLMENT MODE: Focus on Registry Management
+    st.warning("SYSTEM IS IN ENROLLMENT MODE: Card registration is active.")
+    tab_reg, tab_db = st.tabs(["➕ New Enrollment", "🗃️ Master Registry"])
     
-    if cards_data:
-        # Merging card and student metadata for unified view
-        reg_list = []
-        for card_uid, val in cards_data.items():
-            reg_list.append({
-                "Student ID": val.get('student_id', 'N/A'),
-                "Full Name": val.get('name', 'N/A'),
-                "Fingerprint Slot": val.get('fingerprint_id', 'N/A'),
-                "RFID UID": card_uid,
-                "Course": val.get('course', 'N/A')
-            })
+    with tab_reg:
+        with st.form("reg_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                r_id = st.text_input("Student ID:")
+                r_name = st.text_input("Full Name:")
+            with col2:
+                r_rfid = st.text_input("RFID UID (from Pi):")
+                r_fpid = st.number_input("Fingerprint Index (1-127):", min_value=1)
+            if st.form_submit_button("Sync to Cloud"):
+                # Logic: Atomic update to both cards and students nodes
+                db.reference(f'/cards/{r_rfid}').update({"student_id": r_id, "name": r_name, "fingerprint_id": r_fpid})
+                db.reference(f'/students/{r_id}').update({"name": r_name, "rfid": r_rfid})
+                st.success("Registration Synced!"); st.rerun()
+    
+    with tab_db:
+        if cards_data:
+            st.subheader("Current Biometric Mappings")
+            st.dataframe(pd.DataFrame([v for k, v in cards_data.items()]).sort_values("student_id"), use_container_width=True)
+
+else:
+    # ATTENDANCE MODE: Focus on Logs & Module 3 Analytics
+    tab_live, tab_m3 = st.tabs(["📺 Live Monitoring", "📊 Module 3: Reporting & Analytics"])
+    
+    with tab_live:
+        st.subheader("📋 Real-time Logs (2FA Validated)")
+        if not df.empty:
+            # Highlight validation status: Strict Business Rules
+            st.dataframe(df[['formatted_time', 'name', 'status', 'student_id', 'verification_method']]
+                         .sort_values('formatted_time', ascending=False), use_container_width=True)
+        else: st.info("Hardware is active. Waiting for scans...")
+
+    with tab_m3:
+        st.header("🔍 Module 3: Management Insights")
         
-        # LOGIC: Strict sorting by Student ID
-        reg_df = pd.DataFrame(reg_list).sort_values(by="Student ID")
-        st.subheader("Master List (Sorted by Student ID)")
-        st.dataframe(reg_df, use_container_width=True)
+        # 4.1 Attendance Trends & Absenteeism
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.subheader("Daily Status Trend")
+            if not df.empty:
+                counts = df['status'].value_counts()
+                fig, ax = plt.subplots()
+                ax.bar(counts.index, counts.values, color=['#2ecc71', '#f1c40f', '#e74c3c'])
+                st.pyplot(fig)
+        
+        with c2:
+            st.subheader("🚩 Absence Alert")
+            all_sids = set(students_data.keys())
+            present_today = set(df[df['status'] != 'absent']['student_id'].unique()) if not df.empty else set()
+            missing = all_sids - present_today
+            if missing: st.error(f"Missing ({len(missing)}): {', '.join(missing)}")
+            else: st.success("All students accounted for!")
 
         st.markdown("---")
-        # Enrollment Section: Fixes 'garbled' ID by allowing manual input
-        with st.expander("➕ Enroll / Update Student Mapping"):
-            with st.form("enroll_form"):
-                n_id = st.text_input("Student ID (e.g., 24WMR15298):")
-                n_name = st.text_input("Name:")
-                n_rfid = st.text_input("RFID UID (Scan on Pi first):")
-                n_course = st.text_input("Course:")
-                n_fpid = st.text_input("Fingerprint Hardware ID (Slot #):")
-                
-                if st.form_submit_button("Sync to Cloud"):
-                    if n_id and n_rfid:
-                        # Sync both hardware and profile nodes
-                        db.reference(f'/cards/{n_rfid}').update({
-                            "student_id": n_id, "name": n_name, "card_id": n_rfid,
-                            "course": n_course, "fingerprint_id": n_fpid,
-                            "registered_date": datetime.now().isoformat()
-                        })
-                        db.reference(f'/students/{n_id}').update({
-                            "student_id": n_id, "name": n_name, "rfid": n_rfid, "course": n_course
-                        })
-                        st.success(f"Profile {n_id} updated successfully!"); st.rerun()
-
-# --- TAB 3: DATA ANALYTICS & REPORTING (Module 3) ---
-with tab_reporting:
-    st.header("📊 Module 3: Advanced Reporting Interface")
-    
-    if not df_attendance.empty:
-        # 3.1 Attendance Visualization
-        col_charts, col_summary = st.columns([2, 1])
-        with col_charts:
-            st.subheader("Daily Attendance Trend")
-            status_counts = df_attendance['status'].value_counts()
-            fig, ax = plt.subplots()
-            ax.bar(status_counts.index, status_counts.values, color=['#2ecc71', '#f1c40f', '#e74c3c'])
-            st.pyplot(fig)
-        
-        with col_summary:
-            # Automated Absence Alert
-            st.subheader("🚩 Today's Absence Alert")
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            all_uids = set(students_data.keys())
-            # Logic: Only count students marked 'present' or 'late' as present
-            present_ids = set(df_attendance[(df_attendance['record_date'] == today_str) & (df_attendance['status'] != 'absent')]['student_id'].unique())
-            missing = all_uids - present_ids
-            if missing: st.error(f"Missing Students: {', '.join(missing)}")
-            else: st.success("100% Attendance for today!")
-
-        st.markdown("---")
-        
-        # 3.2 Admin Reporting: Manual Status Modification
-        st.subheader("📝 Manual Report Adjustment (Medical Leave / Corrections)")
-        with st.form("manual_correction"):
+        # 4.2 Manual Reporting: Adjustment Logic (Medical Leave)
+        st.subheader("📝 Admin Status Override")
+        with st.form("override"):
             m_sid = st.selectbox("Select Student:", list(students_data.keys()))
-            m_status = st.selectbox("Adjustment:", ["present", "late", "absent (Medical Leave)", "absent"])
-            if st.form_submit_button("Submit Corrected Report"):
+            m_status = st.selectbox("Status Update:", ["present", "late", "absent (Medical Leave)"])
+            if st.form_submit_button("Submit Adjusted Report"):
                 t_key = datetime.now().strftime("%Y-%m-%d")
                 db.reference(f'/attendance/{t_key}').push().set({
                     'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
-                    'status': m_status, 'timestamp': int(time.time()), 'date': t_key,
-                    'verification_method': "Admin_Manual_Override"
-                }); st.success(f"Report adjusted for {m_sid}"); st.rerun()
+                    'status': m_status, 'timestamp': int(time.time()), 
+                    'verification_method': "Manual_Admin_Correction"
+                }); st.rerun()
 
         st.markdown("---")
-        
-        # 3.3 Permanent Record-Keeping: Firebase to Excel
-        st.subheader("💾 Permanent Record-Keeping (Excel Sync)")
-        st.write("Bridging cloud data to a formatted Excel sheet for advanced calculation.")
-        
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df_attendance[['timestamp', 'name', 'student_id', 'status', 'verification_method']].to_excel(writer, index=False, sheet_name='BMIT2123_Logs')
-            writer.close()
-        
-        st.download_button(
-            label="📥 Download Official Attendance Report (.xlsx)",
-            data=buffer.getvalue(),
-            file_name=f"Attendance_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.ms-excel"
-        )
-    else:
-        st.info("Insufficient data for reporting. Sync hardware sensors to populate logs.")
+        # 4.3 Export Engine: Fixes Hash Display Issue
+        st.subheader("💾 Export Official Record")
+        if not df.empty:
+            # FIX: Prepare DataFrame for Excel by ensuring types are clean
+            export_df = df[['formatted_time', 'name', 'student_id', 'status', 'verification_method']].copy()
+            export_df.rename(columns={'formatted_time': 'Timestamp (Sync)'}, inplace=True)
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                export_df.to_excel(writer, index=False, sheet_name='BMIT2123_Logs')
+                # Business Rule: Autofit columns for Excel readability
+                writer.close()
+            
+            st.download_button(
+                label="📥 Download Excel Report (xlsx)",
+                data=buffer.getvalue(),
+                file_name=f"Attendance_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.ms-excel"
+            )
