@@ -234,20 +234,30 @@ else:
             ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c'])
             st.pyplot(fig_pie)
             
-            # --- NEW ADDITION: 4.3 DAILY ATTENDANCE TREND LINE CHART ---
+            # --- NEW ADDITION: 4.3 DAILY ATTENDANCE TREND (STATUS COMPARISON) ---
             st.markdown("---")
-            st.subheader("📈 Daily Attendance Trend")
-            # Smart logic: Count unique students per day to avoid double counting (Check-in/Leave)
-            present_df = df_all[df_all['status'] == 'present'].drop_duplicates(subset=['record_date', 'student_id'])
-            if not present_df.empty:
-                daily_trend = present_df.groupby('record_date').size().reset_index(name='Total_Present')
+            st.subheader("📈 Daily Attendance Trend (Status Comparison)")
+            
+            # Smart logic: Drop duplicates by Date, Student ID, and Status to prevent double counting
+            unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
+            
+            if not unique_daily.empty:
+                # Group by date and status to count students
+                daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Student_Count')
                 daily_trend = daily_trend.sort_values('record_date')
                 
                 fig_line, ax_line = plt.subplots(figsize=(10, 4))
-                sns.lineplot(data=daily_trend, x='record_date', y='Total_Present', marker='o', color='#2980b9', ax=ax_line)
+                # Key change: Add hue='status' to plot different lines for present, absent, late
+                sns.lineplot(data=daily_trend, x='record_date', y='Student_Count', hue='status', 
+                             marker='o', palette='Set2', ax=ax_line)
+                
                 ax_line.set_xlabel("Date")
-                ax_line.set_ylabel("Total Students Present")
+                ax_line.set_ylabel("Number of Students")
+                ax_line.set_title("Attendance vs Absence Over Time")
                 plt.xticks(rotation=45)
+                # Move legend outside the plot to prevent overlap
+                plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left') 
+                
                 st.pyplot(fig_line)
             else:
                 st.info("Not enough data to plot the daily trend.")
