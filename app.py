@@ -5,22 +5,25 @@ from firebase_admin import credentials, db
 import matplotlib.pyplot as plt
 from datetime import datetime
 import time
+import io
 
 # ==========================================================
-# 1. SYSTEM AUTHENTICATION & INITIALIZATION
+# 1. SYSTEM CONFIGURATION & CLOUD AUTHENTICATION
 # ==========================================================
 st.set_page_config(page_title="IoT Command Center", layout="wide", page_icon="🛡️")
 st.title("🛡️ BMIT2123: Professional Biometric & RFID Management")
 
-# Initialize Firebase with Streamlit Secrets
+# Initialize Firebase using Streamlit Secrets for cloud security
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
+            # Production: Fetch credentials from Streamlit Cloud Secrets
             cred_dict = dict(st.secrets["firebase"])
-            # Fix newline handling for private keys
+            # Essential: Handle the newline character in the private key
             cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(cred_dict)
         else:
+            # Local Development: Fallback to local JSON key file
             cred = credentials.Certificate("service-account-key.json")
             
         firebase_admin.initialize_app(cred, {
@@ -30,61 +33,77 @@ if not firebase_admin._apps:
         st.error(f"Cloud Connection Failed: {e}"); st.stop()
 
 # ==========================================================
-# 2. DATA ENGINE: FETCHING & SORTING
+# 2. DATA PROCESSING ENGINE: FETCHING & FLATTENING
 # ==========================================================
-# Fetch primary data nodes from Firebase
+# Fetching primary nodes from Firebase
 students_data = db.reference('/students').get() or {} 
 cards_data = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
-# Attendance Flattening Logic
+# Process Nested Attendance Logs into a flat list
 all_records = []
 if attendance_raw:
+    # Structure: { "date": { "record_id": {data} } }
     for date_key, daily_data in attendance_raw.items():
         if isinstance(daily_data, dict):
             for record_id, info in daily_data.items():
                 info['firebase_path'] = f"{date_key}/{record_id}"
                 info['record_date'] = date_key
                 all_records.append(info)
+
 df_attendance = pd.DataFrame(all_records)
 if not df_attendance.empty:
+    # Convert Unix Epoch integer to human-readable Datetime
     df_attendance['timestamp'] = pd.to_datetime(df_attendance['timestamp'], unit='s', errors='coerce')
 
 # ==========================================================
 # 3. SIDEBAR: REMOTE HARDWARE COMMANDS
 # ==========================================================
 st.sidebar.title("🎮 Command Center")
+
 with st.sidebar.expander("🛠️ Hardware Controls", expanded=False):
+    # Remote mode selection (Attendance / Enrollment)
     sys_mode = st.selectbox("Operation Mode:", ["Attendance", "Enrollment"])
-    if st.button("Apply Mode"): db.reference('/control/mode').set(sys_mode)
+    if st.button("Apply Mode"): 
+        db.reference('/control/mode').set(sys_mode)
+    
+    # Remote device lockdown toggle
     is_locked = st.toggle("🔒 Emergency Device Lock")
     db.reference('/control/is_locked').set(is_locked)
+    
+    # Remote trigger for Raspberry Pi buzzer
     if st.button("🔔 Trigger Remote Bell"):
         db.reference('/control/trigger_buzzer').set(True)
-        time.sleep(1); db.reference('/control/trigger_buzzer').set(False)
+        time.sleep(1) 
+        db.reference('/control/trigger_buzzer').set(False)
 
 # ==========================================================
-# 4. MAIN INTERFACE: TABS SYSTEM
+# 4. MAIN INTERFACE: PROFESSIONAL TABS SYSTEM
 # ==========================================================
-tab_monitor, tab_mgmt, tab_analytics = st.tabs(["📺 Live Monitoring", "🗃️ Registry Management", "📈 Insights"])
+tab_monitor, tab_registry, tab_module3 = st.tabs([
+    "📺 Live Monitoring", 
+    "🗃️ Registry Management", 
+    "📊 Module 3: Analytics & Reporting"
+])
 
-# --- TAB 1: LIVE MONITORING ---
+# --- TAB 1: LIVE MONITORING (Real-time Validation) ---
 with tab_monitor:
-    st.subheader("📋 Real-time Logs")
+    st.subheader("📋 Real-time Logs (Business Rule Validation)")
     if not df_attendance.empty:
-        st.dataframe(df_attendance[['timestamp', 'name', 'status', 'student_id']]
+        # Display logs with verification method for validation
+        st.dataframe(df_attendance[['timestamp', 'name', 'status', 'student_id', 'verification_method']]
                      .sort_values(by='timestamp', ascending=False), use_container_width=True)
-    else: st.info("Waiting for hardware signals...")
+    else: st.info("Waiting for hardware synchronization...")
 
-# --- TAB 2: UNIFIED REGISTRY MANAGEMENT (SORTED BY STUDENT ID) ---
-with tab_mgmt:
-    st.header("🗃️ Student Biometric Registry")
+# --- TAB 2: REGISTRY MANAGEMENT (Student ID Sorting) ---
+with tab_registry:
+    st.header("🗃️ Unified Biometric Registry")
     
-    # Process Registry Data for combined display
     if cards_data:
-        registry_list = []
+        # Combined display of hardware and software metadata
+        reg_list = []
         for card_uid, val in cards_data.items():
-            registry_list.append({
+            reg_list.append({
                 "Student ID": val.get('student_id', 'N/A'),
                 "Full Name": val.get('name', 'N/A'),
                 "Fingerprint ID": val.get('fingerprint_id', 'N/A'),
@@ -92,56 +111,88 @@ with tab_mgmt:
                 "Course": val.get('course', 'N/A')
             })
         
-        # 1. Logic: Sort by Student ID
-        reg_df = pd.DataFrame(registry_list).sort_values(by="Student ID")
-        
-        # 2. Unified Display
-        st.subheader("Master Student List (Sorted by Student ID)")
+        # LOGIC: Strict sorting by Student ID for better accessibility
+        reg_df = pd.DataFrame(reg_list).sort_values(by="Student ID")
+        st.subheader("Master List (Sorted by Student ID)")
         st.dataframe(reg_df, use_container_width=True)
 
         st.markdown("---")
-        # Management Actions
-        c_add, c_del = st.columns(2)
-        with c_add:
-            st.subheader("➕ Enroll New Record")
-            with st.form("enroll_student"):
-                new_sid = st.text_input("Student ID:")
-                new_name = st.text_input("Name:")
-                new_rfid = st.text_input("RFID UID:")
-                new_course = st.text_input("Course:")
-                # Flexible input for Fingerprint ID to avoid "garbled" constraints
-                new_fpid = st.text_input("Assign Fingerprint ID (Hardware Slot):")
-                if st.form_submit_button("Sync to Cloud"):
-                    if new_sid and new_rfid:
-                        db.reference(f'/cards/{new_rfid}').update({
-                            "student_id": new_sid, "name": new_name, "card_id": new_rfid,
-                            "course": new_course, "fingerprint_id": new_fpid,
+        # Enrollment Section
+        with st.expander("➕ Enroll / Update Student Entry"):
+            with st.form("enroll_form"):
+                n_id = st.text_input("Student ID (e.g., 24WMR15298):")
+                n_name = st.text_input("Name:")
+                n_rfid = st.text_input("RFID UID (Scan on Pi first):")
+                n_course = st.text_input("Course:")
+                n_fpid = st.text_input("Fingerprint Hardware ID (Slot #):")
+                
+                if st.form_submit_button("Save to Database"):
+                    if n_id and n_rfid:
+                        db.reference(f'/cards/{n_rfid}').update({
+                            "student_id": n_id, "name": n_name, "card_id": n_rfid,
+                            "course": n_course, "fingerprint_id": n_fpid,
                             "registered_date": datetime.now().isoformat()
                         })
-                        db.reference(f'/students/{new_sid}').update({
-                            "student_id": new_sid, "name": new_name, "rfid": new_rfid, "course": new_course
+                        db.reference(f'/students/{n_id}').update({
+                            "student_id": n_id, "name": n_name, "rfid": n_rfid, "course": n_course
                         })
-                        st.success(f"Profile {new_sid} Updated!"); st.rerun()
-        
-        with c_del:
-            st.subheader("🗑️ Remove Records")
-            del_id = st.selectbox("Select Student ID to remove mapping:", reg_df['Student ID'].tolist())
-            if st.button("Delete Hardware Mapping"):
-                # Find card UID linked to this Student ID to delete from /cards
-                card_to_del = reg_df[reg_df['Student ID'] == del_id]['RFID UID'].values[0]
-                db.reference(f'/cards/{card_to_del}').delete()
-                st.warning(f"Mapping for {del_id} removed."); st.rerun()
-    else:
-        st.info("No records found. Please enroll a user via the sidebar.")
+                        st.success(f"Profile {n_id} updated successfully!"); st.rerun()
 
-# --- TAB 3: INSIGHTS (DATA SCIENCE) ---
-with tab_analytics:
-    st.header("🔍 Campus Data Intelligence")
-    st.subheader("🚩 Missing Students (Today)")
-    today = datetime.now().strftime("%Y-%m-%d")
-    all_uids = set(students_data.keys())
-    present_today = set(df_attendance[(df_attendance['record_date'] == today) & (df_attendance['status'] != 'absent')]['student_id'].unique()) if not df_attendance.empty else set()
-    missing = all_uids - present_today
-    if missing:
-        st.error(f"Missing Students: {', '.join(missing)}")
-    else: st.success("All students are accounted for today.")
+# --- TAB 3: DATA ANALYTICS & REPORTING (Module 3 Requirements) ---
+with tab_module3:
+    st.header("📊 Module 3: Advanced Reporting Interface")
+    
+    if not df_attendance.empty:
+        # 3.1 Attendance Visualization
+        col_charts, col_summary = st.columns([2, 1])
+        with col_charts:
+            st.subheader("Attendance Trends (Daily Distribution)")
+            status_counts = df_attendance['status'].value_counts()
+            fig, ax = plt.subplots()
+            ax.bar(status_counts.index, status_counts.values, color=['#2ecc71', '#f1c40f', '#e74c3c'])
+            st.pyplot(fig)
+        
+        with col_summary:
+            # Frequent Absenteeism Analysis
+            st.subheader("🚩 Today's Absence Alert")
+            today = datetime.now().strftime("%Y-%m-%d")
+            all_uids = set(students_data.keys())
+            present_today = set(df_attendance[(df_attendance['record_date'] == today) & (df_attendance['status'] != 'absent')]['student_id'].unique())
+            missing = all_uids - present_today
+            if missing: st.error(f"Missing Students: {', '.join(missing)}")
+            else: st.success("Full Attendance!")
+
+        st.markdown("---")
+        
+        # 3.2 Admin Reporting: Manual Status Modification
+        st.subheader("📝 Manual Report Adjustment (Medical Leave / Corrections)")
+        with st.form("manual_override"):
+            m_sid = st.selectbox("Select Student:", list(students_data.keys()))
+            m_status = st.selectbox("Adjustment:", ["present", "late", "absent (Medical Leave)", "absent"])
+            if st.form_submit_button("Apply Correction"):
+                t_str = datetime.now().strftime("%Y-%m-%d")
+                db.reference(f'/attendance/{t_str}').push().set({
+                    'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
+                    'status': m_status, 'timestamp': int(time.time()), 'date': t_str,
+                    'verification_method': "Admin_Manual_Correction"
+                }); st.success(f"Report adjusted for {m_sid}"); st.rerun()
+
+        st.markdown("---")
+        
+        # 3.3 Permanent Record-Keeping: Firebase to Excel Sync
+        st.subheader("💾 Data Export & Permanent Record-Keeping")
+        st.write("Sync latest Firebase cloud data to a formatted Excel report.")
+        
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df_attendance[['timestamp', 'name', 'student_id', 'status', 'verification_method']].to_excel(writer, index=False, sheet_name='Attendance_Report')
+            writer.close()
+        
+        st.download_button(
+            label="📥 Download Official Report (.xlsx)",
+            data=buffer.getvalue(),
+            file_name=f"Attendance_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.ms-excel"
+        )
+    else:
+        st.info("Insufficient attendance data for reporting. Sync hardware sensors to proceed.")
