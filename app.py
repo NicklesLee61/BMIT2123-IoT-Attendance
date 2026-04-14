@@ -79,6 +79,23 @@ if not df_all.empty:
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
 
 # ==========================================================
+# 🚀 GLOBAL UI HELPER: Emoji Formatters
+# ==========================================================
+def display_status_emoji(s):
+    s_lower = str(s).lower()
+    if 'present' in s_lower: return f"🟢 {s}"
+    elif 'absent' in s_lower: return f"🔴 {s}"
+    elif 'late' in s_lower: return f"🟠 {s}"
+    elif 'leave' in s_lower: return f"🔵 {s}"
+    return s
+    
+def display_flow_emoji(f):
+    if 'Check-in' in str(f): return f"🟢 {f}"
+    elif 'Check-out' in str(f): return f"🔵 {f}"
+    elif f == '--': return f"⚪ {f}"
+    return f
+
+# ==========================================================
 # 3. SIDEBAR: PURE REMOTE HARDWARE COMMAND CENTER
 # ==========================================================
 st.sidebar.title("🎮 Master Control Center")
@@ -237,25 +254,10 @@ else:
             
             st.markdown("---") 
 
-            # 🚀 NEW: View-only copy for colorful display (Does not affect Excel)
             display_df = df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
-            
-            def add_status_emoji(s):
-                s_lower = str(s).lower()
-                if 'present' in s_lower: return f"🟢 {s}"
-                elif 'absent' in s_lower: return f"🔴 {s}"
-                elif 'late' in s_lower: return f"🟠 {s}"
-                elif 'leave' in s_lower: return f"🔵 {s}"
-                return s
                 
-            def add_flow_emoji(f):
-                if 'Check-in' in str(f): return f"🟢 {f}"
-                elif 'Check-out' in str(f): return f"🔵 {f}"
-                elif f == '--': return f"⚪ {f}"
-                return f
-                
-            display_df['status'] = display_df['status'].apply(add_status_emoji)
-            display_df['flow_type'] = display_df['flow_type'].apply(add_flow_emoji)
+            display_df['status'] = display_df['status'].apply(display_status_emoji)
+            display_df['flow_type'] = display_df['flow_type'].apply(display_flow_emoji)
             
             display_df = display_df.reset_index(drop=True)
             display_df.index = display_df.index + 1
@@ -274,7 +276,9 @@ else:
                     m_disp = st.selectbox("Target Profile:", sorted(profile_mapping.keys()))
                     m_date = st.date_input("Date:", datetime.now())
                     m_time = st.time_input("Time:", dt_time(9, 0))
-                    m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
+                    
+                    # 🚀 UPGRADED: Added format_func to display emoji without altering saved DB data
+                    m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
                     
                     if st.form_submit_button("Force Sync Record"):
                         m_sid = profile_mapping[m_disp]
@@ -290,11 +294,15 @@ else:
         with c_mod:
             st.subheader("📝 Modify or Delete Entries")
             if not df_all.empty:
-                log_labels = df_all['formatted_time'] + " | " + df_all['name'] + " (" + df_all['status'] + ")"
-                to_manage = st.selectbox("Select Entry:", log_labels.tolist())
-                row = df_all[log_labels == to_manage].iloc[0]
+                # 🚀 UPGRADED: The dropdown list of logs now features colored emojis for ultra-fast scanning
+                log_display_labels = df_all['formatted_time'] + " | " + df_all['name'] + " (" + df_all['status'].apply(display_status_emoji) + ")"
+                to_manage_display = st.selectbox("Select Entry:", log_display_labels.tolist())
+                
+                row = df_all[log_display_labels == to_manage_display].iloc[0]
+                
                 with st.expander("Update Status"):
-                    new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
+                    # 🚀 UPGRADED: Added format_func to this dropdown as well
+                    new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
                     if st.button("Update Entry"):
                         db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
                         st.success("Updated!"); st.rerun()
