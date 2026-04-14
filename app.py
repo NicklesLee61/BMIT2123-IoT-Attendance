@@ -78,11 +78,11 @@ if not df_all.empty:
     def determine_flow(row):
         stat = str(row.get('status', '')).lower()
         
-        #1. The absent person does not perform any physical actions
+        # 1. The absent person does not perform any physical actions
         if 'absent' in stat:
             return "--"
             
-       #2. Manually mark as "Leaving Classroom" to force an exit action
+        # 2. Manually mark as "Leaving Classroom" to force an exit action
         if stat == 'leave':
             return "Check-out (Early)"
             
@@ -116,6 +116,37 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
         
     is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
     control_ref.update({"is_locked": is_locked})
+
+# --- UPGRADED: SAFE HARDWARE & ID CHECK MODULE ---
+with st.sidebar.expander("🛠️ System ID & Hardware Check", expanded=False):
+    
+    # Feature A: Query Stored Hardware FP IDs (Hardware Action)
+    st.markdown("**1. Hardware Sensor Check**")
+    if st.button("🔍 Query Sensor FP IDs"):
+        control_ref.update({"request_id_list": True})
+        st.toast("Requesting hardware data...")
+
+    # Fetch and display the query results from the new Firebase status node
+    fp_status = db.reference('/system_status/fp_ids').get()
+    if fp_status:
+        st.info(f"Sensor Occupied FP IDs: \n{fp_status}")
+        
+    st.markdown("---")
+    
+    # Feature B: Quick Cloud ID Lookup (RFID & FP)
+    st.markdown("**2. Cloud ID Database Lookup**")
+    lookup_list = ["-- Select Profile --"]
+    if isinstance(cards_raw, dict):
+        # Extract student IDs that have registered hardware tokens
+        lookup_list += sorted([v.get('student_id') for k, v in cards_raw.items() if v.get('student_id')])
+        
+    selected_lookup = st.selectbox("Inspect Assigned IDs:", lookup_list)
+    
+    # Display the specific RFID and Fingerprint ID for the selected student
+    if selected_lookup != "-- Select Profile --":
+        for k, v in cards_raw.items():
+            if v.get('student_id') == selected_lookup:
+                st.success(f"💳 **RFID Card:** `{v.get('card_id', 'Unlinked')}`\n\n👆 **Fingerprint ID:** `{v.get('fingerprint_id', 'Unlinked')}`")
 
 # ==========================================================
 # 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
