@@ -300,7 +300,7 @@ else:
                 selected_date = st.date_input("📅 Filter by Date:", datetime.now(), key="live_date")
                 selected_date_str = selected_date.strftime("%Y-%m-%d")
             with ctrl_col2:
-                search_log = st.text_input("🔍 Search Record (by ID or Name):", placeholder="e.g. 2413458, Sakiko...")
+                search_log = st.text_input("🔍 Search Record (by ID or Name):", placeholder="e.g. 2413458, Sakiko...", key="search_log_monitoring")
             
             view_df = df_all[df_all['record_date'] == selected_date_str]
             
@@ -312,10 +312,10 @@ else:
                 leave_count = len(latest_daily[latest_daily['status'] == 'leave'])
                 
                 k1, k2, k3, k4 = st.columns(4)
-                k1.metric("🟢 Present", present_count)
-                k2.metric("🔴 Absent", absent_count)
-                k3.metric("🟠 Late", late_count)
-                k4.metric("🔵 Leave", leave_count)
+                k1.metric("🟢 Present Today", present_count)
+                k2.metric("🔴 Absent Today", absent_count)
+                k3.metric("🟠 Late Today", late_count)
+                k4.metric("🔵 Leave Today", leave_count)
                 
                 st.markdown("---") 
 
@@ -340,92 +340,130 @@ else:
         else: 
             st.info("Waiting for hardware synchronization...")
 
+    # ==========================================================
+    # 🛠️ tab_console: NEWLY DESIGNED MANUAL RECORD CONSOLE
+    # ==========================================================
     with tab_console:
         st.header("🛠️ Attendance Management Console")
-        c_add, c_mod = st.columns(2)
+        st.write("---")
+        
+        # spacer
+        st.markdown("<br>", unsafe_allow_html=True) 
+
+        # Using gap="large" to give modern spacing
+        c_add, c_mod = st.columns(2, gap="large") 
         
         with c_add:
-            st.subheader("➕ Create Manual Record")
-            
-            # 🚀 UPGRADED: Added explicit search bar for Target Profile selection
-            search_create = st.text_input("🔍 Search Profile (by ID or Name):", placeholder="e.g. 2413458, Sakiko...", key="search_create_input")
-            
-            with st.form("force_add_form"):
-                if profile_mapping:
-                    create_options = sorted(profile_mapping.keys())
-                    
-                    if search_create:
-                        create_options = [p for p in create_options if search_create.lower() in p.lower()]
-                    
-                    if create_options:
-                        m_disp = st.selectbox("Target Profile:", create_options)
-                        m_date = st.date_input("Date:", datetime.now(), key="manual_add_date")
-                        m_time = st.time_input("Time:", dt_time(9, 0))
+            # 🚀 NEW: Design Upgrade -> Wrap inside a Bordered Container for Boundary
+            with st.container(border=True):
+                st.markdown("### ➕ Create Manual Record")
+                st.write("Forbid hardware and manually force a log.")
+                st.markdown("<br>", unsafe_allow_html=True) # spacer
+
+                # search bar moved inside the container block
+                search_create = st.text_input("🔍 Search Profile (by ID or Name):", placeholder="e.g.  Sakiko...", key="search_create_input", label_visibility="collapsed")
+                
+                with st.form("force_add_form", clear_on_submit=True):
+                    if profile_mapping:
+                        create_options = sorted(profile_mapping.keys())
+                        if search_create:
+                            create_options = [p for p in create_options if search_create.lower() in p.lower()]
                         
-                        m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
-                        
-                        if st.form_submit_button("Force Sync Record"):
-                            m_sid = profile_mapping[m_disp]
-                            dt_combined = datetime.combine(m_date, m_time)
-                            unix_ts = int(dt_combined.timestamp())
-                            date_key = m_date.strftime("%Y-%m-%d")
-                            db.reference(f'/attendance/{date_key}').push().set({
-                                'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
-                                'status': m_status, 'timestamp': unix_ts, 'verification_method': "Manual_Admin_Creation"
-                            })
-                            st.success("Record created!"); st.rerun()
-                    else:
-                        st.warning("No student matches your search. Please clear the search box to see all students.")
-                        # Disabled dummy button to maintain form integrity when list is empty
-                        st.form_submit_button("Force Sync Record", disabled=True)
+                        if create_options:
+                            m_disp = st.selectbox("Selected Student Profile:", create_options)
+                            st.write("<br>", unsafe_allow_html=True) # spacer
+                            
+                            # 🚀 Layout improvement: Date and Time side-by-side inside the form
+                            dt_col, tm_col = st.columns(2)
+                            with dt_col:
+                                m_date = st.date_input("Date:", datetime.now(), key="manual_add_date")
+                            with tm_col:
+                                m_time = st.time_input("Time:", dt_time(9, 0))
+                            
+                            st.markdown("<br>", unsafe_allow_html=True) # spacer
+                            m_status = st.selectbox("Status:", ["present", "absent", "late", " MEDICAL absent", "leave"], format_func=display_status_emoji)
+                            
+                            st.markdown("<br>", unsafe_allow_html=True) # spacer
+                            if st.form_submit_button("Force Sync New Record", type="primary"):
+                                m_sid = profile_mapping[m_disp]
+                                dt_combined = datetime.combine(m_date, m_time)
+                                unix_ts = int(dt_combined.timestamp())
+                                date_key = m_date.strftime("%Y-%m-%d")
+                                db.reference(f'/attendance/{date_key}').push().set({
+                                    'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
+                                    'status': m_status, 'timestamp': unix_ts, 'verification_method': "Manual_Admin_Creation"
+                                })
+                                st.toast(f"✅ Record created for {students_data[m_sid].get('name')}")
+                                time.sleep(1)
+                                st.rerun()
+                        else:
+                            st.warning("No matches. Please clear search.")
+                            st.form_submit_button("Force Sync Record", disabled=True)
+                    # form ends
 
         with c_mod:
-            st.subheader("📝 Modify or Delete Entries")
-            if not df_all.empty:
-                st.markdown("##### 🔍 Search Filters")
-                show_all_dates = st.checkbox("🕰️ View All History (Disable Date Filter)")
+            # 🚀 NEW: Design Upgrade -> Wrap inside a Bordered Container for Boundary
+            with st.container(border=True):
+                st.markdown("### 📝 Modify or Delete Entries")
+                st.write("Manage historical database records.")
+                st.markdown("<br>", unsafe_allow_html=True) # spacer
                 
-                mod_filter_col1, mod_filter_col2 = st.columns(2)
-                with mod_filter_col1:
-                    mod_date = st.date_input("Filter by Date:", datetime.now(), key="mod_date_filter", disabled=show_all_dates)
-                    mod_date_str = mod_date.strftime("%Y-%m-%d")
-                with mod_filter_col2:
-                    filter_options = ["-- All Students --"] + sorted(profile_mapping.keys()) if profile_mapping else ["-- All Students --"]
-                    mod_student = st.selectbox("Filter by Student:", filter_options, key="mod_student_filter")
-                
-                if show_all_dates:
-                    filtered_df = df_all.copy() 
-                else:
-                    filtered_df = df_all[df_all['record_date'] == mod_date_str] 
-                
-                if mod_student != "-- All Students --":
-                    selected_sid = profile_mapping[mod_student]
-                    filtered_df = filtered_df[filtered_df['student_id'] == selected_sid]
-                
-                st.markdown("---")
-                
-                if not filtered_df.empty:
-                    log_display_labels = filtered_df['formatted_time'] + " | " + filtered_df['name'] + " (" + filtered_df['status'].apply(display_status_emoji) + ")"
-                    to_manage_display = st.selectbox("Select Entry to Manage:", log_display_labels.tolist())
+                if not df_all.empty:
+                    st.markdown("##### 1. Find the Record")
+                    show_all_dates = st.checkbox("🕰️ View All History (Disable Date Filter)")
                     
-                    row = filtered_df[log_display_labels == to_manage_display].iloc[0]
+                    # Layout improvement inside modify container
+                    mod_filter_col1, mod_filter_col2 = st.columns([1.5, 2])
+                    with mod_filter_col1:
+                        mod_date = st.date_input("Filter Date:", datetime.now(), key="mod_date_filter", disabled=show_all_dates)
+                        mod_date_str = mod_date.strftime("%Y-%m-%d")
+                    with mod_filter_col2:
+                        filter_options = ["-- All Students --"] + sorted(profile_mapping.keys()) if profile_mapping else ["-- All Students --"]
+                        mod_student = st.selectbox("Filter Student:", filter_options, key="mod_student_filter")
                     
-                    with st.expander("✏️ Update Status"):
-                        new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
-                        if st.button("Submit Update"):
-                            db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
-                            st.success("Updated successfully!"); st.rerun()
-                            
-                    if st.button("🗑️ Permanently Delete Entry", key="del_entry"):
-                        db.reference(f'/attendance/{row["firebase_path"]}').delete()
-                        st.warning("Entry removed completely from database."); st.rerun()
-                else:
-                    if show_all_dates and mod_student != "-- All Students --":
-                        st.info(f"No attendance records found for this student in the entire history.")
+                    if show_all_dates:
+                        filtered_df = df_all.copy() 
                     else:
-                        st.info("No records found for the selected filters.")
-            else:
-                st.info("No attendance records available in the database yet.")
+                        filtered_df = df_all[df_all['record_date'] == mod_date_str] 
+                    
+                    if mod_student != "-- All Students --":
+                        selected_sid = profile_mapping[mod_student]
+                        filtered_df = filtered_df[filtered_df['student_id'] == selected_sid]
+                    
+                    # Visually separate filtering from action
+                    st.write("---")
+                    
+                    if not filtered_df.empty:
+                        log_display_labels = filtered_df['formatted_time'] + " | " + filtered_df['name'] + " (" + filtered_df['status'].apply(display_status_emoji) + ")"
+                        st.markdown("##### 2. Select entry to manage:")
+                        to_manage_display = st.selectbox("Records Selector:", log_display_labels.tolist(), label_visibility="collapsed")
+                        
+                        row = filtered_df[log_display_labels == to_manage_display].iloc[0]
+                        
+                        # Use an expander Inside the bordered container for deep level action
+                        with st.expander("✏️ Update status for this entry", expanded=True):
+                            new_stat = st.selectbox("Change status to:", ["present", "absent", "late", " MEDICAL absent", "leave"], format_func=display_status_emoji)
+                            if st.button("Submit Status Update", type="secondary", key="submit_mod"):
+                                db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
+                                st.toast("✅ Record updated!")
+                                time.sleep(1)
+                                st.rerun()
+                                
+                        st.write("<br>", unsafe_allow_html=True) # spacer
+                        # danger button style
+                        if st.button("🗑️ Permanently Delete Entry", key="del_entry"):
+                            db.reference(f'/attendance/{row["firebase_path"]}').delete()
+                            st.toast("🗑️ Record erased completely.")
+                            time.sleep(1)
+                            st.rerun()
+                    else:
+                        # Styling info boxes to look clean inside container
+                        if show_all_dates and mod_student != "-- All Students --":
+                            st.info(f"No historical records found for this student.")
+                        else:
+                            st.info("No records found for select filters.")
+                else:
+                    st.info("No attendance records in database yet.")
 
     with tab_m3:
         st.header("📊 Module 3: Advanced Analytics Interface")
