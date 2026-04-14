@@ -49,7 +49,7 @@ if isinstance(cards_raw, dict):
                 "student_id": sid
             }
 
-# 🚀 NEW: Build a universal display mapping -> "Name (ID)" : "ID"
+# 🚀 Universal display mapping -> "Name (ID)" : "ID"
 profile_mapping = {}
 for sid, info in students_data.items():
     display_name = f"{info.get('name', 'Unknown')} ({sid})"
@@ -112,11 +112,11 @@ if current_hw_mode == "Enrollment":
     
     with tab_reg:
         st.subheader("Student Registry & Smart Re-binding")
-        st.info("💡 To **re-bind a lost card**, enter the existing Student ID and fill in the new RFID UID.")
+        st.info("💡 To **re-bind a lost card**, enter the existing Student ID and fill in the new RFID UID. Leave other fields blank to keep existing data.")
         with st.form("enroll_form"):
             c1, c2 = st.columns(2)
             with c1:
-                n_id = st.text_input("Student ID (Matches existing for re-bind):")
+                n_id = st.text_input("Student ID (Required):")
                 n_name = st.text_input("Full Name:")
                 n_course = st.text_input("Academic Program:") 
             with c2:
@@ -125,21 +125,40 @@ if current_hw_mode == "Enrollment":
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
             if st.form_submit_button("Finalize Registration / Update"):
-                if n_id and n_name:
+                if n_id:
+                    # 🚀 BUG FIX: Smart Data Preservation
+                    # Fetch existing data so we don't overwrite with blanks
+                    exist_stu = students_data.get(n_id, {})
+                    exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
+                    exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
+
+                    # Only update if user typed something new; otherwise keep old data
+                    final_name = n_name if n_name else exist_stu.get('name', 'Unknown')
+                    final_course = n_course if n_course else exist_stu.get('course', 'Unknown')
+                    final_rfid = n_rfid if n_rfid else exist_card.get('card_id', 'Unlinked')
+                    final_fpid = n_fpid if n_fpid else exist_card.get('fingerprint_id', 'Unlinked')
+
+                    # 1. Update /students
                     db.reference(f'/students/{n_id}').update({
-                        "student_id": n_id, "name": n_name, "rfid": n_rfid if n_rfid else "Unlinked", 
-                        "course": n_course, "registered_date": n_date
+                        "student_id": n_id, "name": final_name, "rfid": final_rfid, 
+                        "course": final_course, "registered_date": n_date
                     })
-                    existing_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
+
+                    # 2. Update /cards
                     card_payload = {
-                        "student_id": n_id, "name": n_name, "card_id": n_rfid, 
-                        "course": n_course, "fingerprint_id": n_fpid, "registered_date": n_date
+                        "student_id": n_id, "name": final_name, "card_id": final_rfid, 
+                        "course": final_course, "fingerprint_id": final_fpid, "registered_date": n_date
                     }
-                    if existing_key:
-                        db.reference(f'/cards/{existing_key}').update(card_payload)
+                    if exist_card_key:
+                        db.reference(f'/cards/{exist_card_key}').update(card_payload)
                     else:
-                        db.reference('/cards').push().set(card_payload)
+                        # Only create new card record if there's actual hardware data
+                        if final_rfid != "Unlinked" or final_fpid != "Unlinked":
+                            db.reference('/cards').push().set(card_payload)
+                            
                     st.success(f"Profile {n_id} updated successfully!"); st.rerun()
+                else:
+                    st.error("⚠️ Student ID is required to process the update.")
 
     with tab_list:
         if students_data:
@@ -155,16 +174,16 @@ if current_hw_mode == "Enrollment":
             st.markdown("---")
             st.subheader("⚠️ Danger Zone: Remove Student")
             
-            # 🚀 UPGRADED: Delete using Name (ID) display format
-            del_disp = st.selectbox("Select Student Profile to remove:", sorted(profile_mapping.keys()))
-            
-            if st.button("🗑️ Permanently Delete Student Profile"):
-                del_id = profile_mapping[del_disp] # Map back to real ID
-                db.reference(f'/students/{del_id}').delete()
-                card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
-                if card_key:
-                    db.reference(f'/cards/{card_key}').delete()
-                st.warning(f"Profile {del_disp} and associated hardware tokens erased from cloud database."); st.rerun()
+            if profile_mapping:
+                del_disp = st.selectbox("Select Student Profile to remove:", sorted(profile_mapping.keys()))
+                
+                if st.button("🗑️ Permanently Delete Student Profile"):
+                    del_id = profile_mapping[del_disp] # Map back to real ID
+                    db.reference(f'/students/{del_id}').delete()
+                    card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
+                    if card_key:
+                        db.reference(f'/cards/{card_key}').delete()
+                    st.warning(f"Profile {del_disp} and associated hardware tokens erased from cloud database."); st.rerun()
 
     with tab_diag:
         st.subheader("⚙️ System Diagnostics & ID Management")
@@ -187,16 +206,16 @@ if current_hw_mode == "Enrollment":
             st.markdown("#### 2. Cloud Database ID Lookup")
             st.info("Quickly inspect the RFID and Fingerprint ID bound to a specific student profile.")
             
-            # 🚀 UPGRADED: Lookup using Name (ID) display format
-            lookup_list = ["-- Select Profile --"] + sorted(profile_mapping.keys())
-            selected_lookup = st.selectbox("Search Profile:", lookup_list, label_visibility="collapsed")
-            
-            if selected_lookup != "-- Select Profile --":
-                real_sid = profile_mapping[selected_lookup] # Map back to real ID
-                c_info = next((v for v in cards_raw.values() if v.get('student_id') == real_sid), None)
-                r_id = c_info.get('card_id', 'Unlinked') if c_info else "No Record"
-                f_id = c_info.get('fingerprint_id', 'Unlinked') if c_info else "No Record"
-                st.success(f"💳 **RFID UID:** `{r_id}`\n\n👆 **Fingerprint ID:** `{f_id}`")
+            if profile_mapping:
+                lookup_list = ["-- Select Profile --"] + sorted(profile_mapping.keys())
+                selected_lookup = st.selectbox("Search Profile:", lookup_list, label_visibility="collapsed")
+                
+                if selected_lookup != "-- Select Profile --":
+                    real_sid = profile_mapping[selected_lookup] # Map back to real ID
+                    c_info = next((v for v in cards_raw.values() if v.get('student_id') == real_sid), None)
+                    r_id = c_info.get('card_id', 'Unlinked') if c_info else "No Record"
+                    f_id = c_info.get('fingerprint_id', 'Unlinked') if c_info else "No Record"
+                    st.success(f"💳 **RFID UID:** `{r_id}`\n\n👆 **Fingerprint ID:** `{f_id}`")
 
 else:
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
@@ -217,22 +236,22 @@ else:
             st.subheader("➕ Create Manual Record")
             with st.form("force_add_form"):
                 
-                # 🚀 UPGRADED: Add records using Name (ID) display format
-                m_disp = st.selectbox("Target Profile:", sorted(profile_mapping.keys()))
-                m_date = st.date_input("Date:", datetime.now())
-                m_time = st.time_input("Time:", dt_time(9, 0))
-                m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
-                
-                if st.form_submit_button("Force Sync Record"):
-                    m_sid = profile_mapping[m_disp] # Map back to real ID
-                    dt_combined = datetime.combine(m_date, m_time)
-                    unix_ts = int(dt_combined.timestamp())
-                    date_key = m_date.strftime("%Y-%m-%d")
-                    db.reference(f'/attendance/{date_key}').push().set({
-                        'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
-                        'status': m_status, 'timestamp': unix_ts, 'verification_method': "Manual_Admin_Creation"
-                    })
-                    st.success("Record created!"); st.rerun()
+                if profile_mapping:
+                    m_disp = st.selectbox("Target Profile:", sorted(profile_mapping.keys()))
+                    m_date = st.date_input("Date:", datetime.now())
+                    m_time = st.time_input("Time:", dt_time(9, 0))
+                    m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
+                    
+                    if st.form_submit_button("Force Sync Record"):
+                        m_sid = profile_mapping[m_disp] # Map back to real ID
+                        dt_combined = datetime.combine(m_date, m_time)
+                        unix_ts = int(dt_combined.timestamp())
+                        date_key = m_date.strftime("%Y-%m-%d")
+                        db.reference(f'/attendance/{date_key}').push().set({
+                            'student_id': m_sid, 'name': students_data[m_sid].get('name', 'N/A'),
+                            'status': m_status, 'timestamp': unix_ts, 'verification_method': "Manual_Admin_Creation"
+                        })
+                        st.success("Record created!"); st.rerun()
 
         with c_mod:
             st.subheader("📝 Modify or Delete Entries")
