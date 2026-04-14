@@ -49,6 +49,12 @@ if isinstance(cards_raw, dict):
                 "student_id": sid
             }
 
+# 🚀 NEW: Build a universal display mapping -> "Name (ID)" : "ID"
+profile_mapping = {}
+for sid, info in students_data.items():
+    display_name = f"{info.get('name', 'Unknown')} ({sid})"
+    profile_mapping[display_name] = sid
+
 all_records = []
 if attendance_raw:
     for date_key, daily_data in attendance_raw.items():
@@ -102,7 +108,6 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    # 🚀 NEW UI ARCHITECTURE: Added tab_diag for Hardware Diagnostics
     tab_reg, tab_list, tab_diag = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry", "⚙️ Hardware Diagnostics"])
     
     with tab_reg:
@@ -149,15 +154,18 @@ if current_hw_mode == "Enrollment":
 
             st.markdown("---")
             st.subheader("⚠️ Danger Zone: Remove Student")
-            del_id = st.selectbox("Select Student Profile to remove:", sorted(students_data.keys()))
+            
+            # 🚀 UPGRADED: Delete using Name (ID) display format
+            del_disp = st.selectbox("Select Student Profile to remove:", sorted(profile_mapping.keys()))
+            
             if st.button("🗑️ Permanently Delete Student Profile"):
+                del_id = profile_mapping[del_disp] # Map back to real ID
                 db.reference(f'/students/{del_id}').delete()
                 card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
                 if card_key:
                     db.reference(f'/cards/{card_key}').delete()
-                st.warning(f"Profile {del_id} and associated hardware tokens erased from cloud database."); st.rerun()
+                st.warning(f"Profile {del_disp} and associated hardware tokens erased from cloud database."); st.rerun()
 
-    # 🚀 THE NEW HOME FOR DIAGNOSTICS
     with tab_diag:
         st.subheader("⚙️ System Diagnostics & ID Management")
         st.markdown("Use these tools to verify hardware synchronization and quickly inspect assigned tokens.")
@@ -178,11 +186,14 @@ if current_hw_mode == "Enrollment":
         with diag_col2:
             st.markdown("#### 2. Cloud Database ID Lookup")
             st.info("Quickly inspect the RFID and Fingerprint ID bound to a specific student profile.")
-            lookup_list = ["-- Select Profile --"] + sorted(list(students_data.keys()))
-            selected_lookup = st.selectbox("Search Student ID:", lookup_list, label_visibility="collapsed")
+            
+            # 🚀 UPGRADED: Lookup using Name (ID) display format
+            lookup_list = ["-- Select Profile --"] + sorted(profile_mapping.keys())
+            selected_lookup = st.selectbox("Search Profile:", lookup_list, label_visibility="collapsed")
             
             if selected_lookup != "-- Select Profile --":
-                c_info = next((v for v in cards_raw.values() if v.get('student_id') == selected_lookup), None)
+                real_sid = profile_mapping[selected_lookup] # Map back to real ID
+                c_info = next((v for v in cards_raw.values() if v.get('student_id') == real_sid), None)
                 r_id = c_info.get('card_id', 'Unlinked') if c_info else "No Record"
                 f_id = c_info.get('fingerprint_id', 'Unlinked') if c_info else "No Record"
                 st.success(f"💳 **RFID UID:** `{r_id}`\n\n👆 **Fingerprint ID:** `{f_id}`")
@@ -205,11 +216,15 @@ else:
         with c_add:
             st.subheader("➕ Create Manual Record")
             with st.form("force_add_form"):
-                m_sid = st.selectbox("Target Profile:", sorted(students_data.keys()))
+                
+                # 🚀 UPGRADED: Add records using Name (ID) display format
+                m_disp = st.selectbox("Target Profile:", sorted(profile_mapping.keys()))
                 m_date = st.date_input("Date:", datetime.now())
                 m_time = st.time_input("Time:", dt_time(9, 0))
                 m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
+                
                 if st.form_submit_button("Force Sync Record"):
+                    m_sid = profile_mapping[m_disp] # Map back to real ID
                     dt_combined = datetime.combine(m_date, m_time)
                     unix_ts = int(dt_combined.timestamp())
                     date_key = m_date.strftime("%Y-%m-%d")
