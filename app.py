@@ -74,7 +74,7 @@ if not df_all.empty:
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
 
 # ==========================================================
-# 3. SIDEBAR: REMOTE HARDWARE COMMAND CENTER
+# 3. SIDEBAR: PURE REMOTE HARDWARE COMMAND CENTER
 # ==========================================================
 st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
@@ -96,32 +96,14 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
     is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
     control_ref.update({"is_locked": is_locked})
 
-with st.sidebar.expander("🔍 System ID & Hardware Check", expanded=False):
-    st.markdown("**1. Hardware Sensor Check**")
-    if st.button("🔍 Query Sensor FP IDs"):
-        control_ref.update({"request_id_list": True})
-        st.toast("Requesting hardware data...")
-
-    fp_status = db.reference('/system_status/fp_ids').get()
-    if fp_status: st.info(f"Sensor Occupied FP IDs: \n{fp_status}")
-    st.markdown("---")
-    st.markdown("**2. Quick Lookup (RFID & Fingerprint)**")
-    lookup_list = ["-- Select Profile --"] + sorted(list(students_data.keys()))
-    selected_lookup = st.selectbox("Search Student ID:", lookup_list)
-    
-    if selected_lookup != "-- Select Profile --":
-        c_info = next((v for v in cards_raw.values() if v.get('student_id') == selected_lookup), None)
-        r_id = c_info.get('card_id', 'Unlinked') if c_info else "No Record"
-        f_id = c_info.get('fingerprint_id', 'Unlinked') if c_info else "No Record"
-        st.success(f"💳 **RFID:** `{r_id}`\n\n👆 **FP ID:** `{f_id}`")
-
 # ==========================================================
 # 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
 # ==========================================================
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    tab_reg, tab_list = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry"])
+    # 🚀 NEW UI ARCHITECTURE: Added tab_diag for Hardware Diagnostics
+    tab_reg, tab_list, tab_diag = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry", "⚙️ Hardware Diagnostics"])
     
     with tab_reg:
         st.subheader("Student Registry & Smart Re-binding")
@@ -165,20 +147,45 @@ if current_hw_mode == "Enrollment":
                 })
             st.dataframe(pd.DataFrame(master_registry).sort_values("student_id"), use_container_width=True)
 
-            # 🚀 RESTORED & UPGRADED: Delete Student Interface
             st.markdown("---")
             st.subheader("⚠️ Danger Zone: Remove Student")
             del_id = st.selectbox("Select Student Profile to remove:", sorted(students_data.keys()))
             if st.button("🗑️ Permanently Delete Student Profile"):
-                # 1. Delete from /students node
                 db.reference(f'/students/{del_id}').delete()
-                
-                # 2. Delete linked hardware token from /cards node to prevent ghost accounts
                 card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
                 if card_key:
                     db.reference(f'/cards/{card_key}').delete()
-                    
                 st.warning(f"Profile {del_id} and associated hardware tokens erased from cloud database."); st.rerun()
+
+    # 🚀 THE NEW HOME FOR DIAGNOSTICS
+    with tab_diag:
+        st.subheader("⚙️ System Diagnostics & ID Management")
+        st.markdown("Use these tools to verify hardware synchronization and quickly inspect assigned tokens.")
+        
+        diag_col1, diag_col2 = st.columns(2)
+        
+        with diag_col1:
+            st.markdown("#### 1. Hardware Sensor Ping")
+            st.info("Pings the physical fingerprint scanner to retrieve currently occupied memory slots.")
+            if st.button("🔍 Query Sensor FP IDs", use_container_width=True):
+                control_ref.update({"request_id_list": True})
+                st.toast("Requesting hardware data...")
+
+            fp_status = db.reference('/system_status/fp_ids').get()
+            if fp_status: 
+                st.code(f"Occupied Slots:\n{fp_status}", language="json")
+                
+        with diag_col2:
+            st.markdown("#### 2. Cloud Database ID Lookup")
+            st.info("Quickly inspect the RFID and Fingerprint ID bound to a specific student profile.")
+            lookup_list = ["-- Select Profile --"] + sorted(list(students_data.keys()))
+            selected_lookup = st.selectbox("Search Student ID:", lookup_list, label_visibility="collapsed")
+            
+            if selected_lookup != "-- Select Profile --":
+                c_info = next((v for v in cards_raw.values() if v.get('student_id') == selected_lookup), None)
+                r_id = c_info.get('card_id', 'Unlinked') if c_info else "No Record"
+                f_id = c_info.get('fingerprint_id', 'Unlinked') if c_info else "No Record"
+                st.success(f"💳 **RFID UID:** `{r_id}`\n\n👆 **Fingerprint ID:** `{f_id}`")
 
 else:
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
