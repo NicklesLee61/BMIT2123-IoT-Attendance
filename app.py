@@ -43,13 +43,11 @@ students_data = db.reference('/students').get() or {}
 cards_raw = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
-# --- 🚀 FIX 2: SMART MERGE (Fix missing students in registry) ---
-# If a student exists in /cards but not in /students, force them into students_data
+# --- SMART MERGE (Fix missing students in registry) ---
 if isinstance(cards_raw, dict):
     for push_id, card_info in cards_raw.items():
         sid = card_info.get('student_id')
         if sid and sid not in students_data:
-            # Create a fallback profile for the registry & dropdowns
             students_data[sid] = {
                 "name": card_info.get('name', 'Unknown'),
                 "course": card_info.get('course', 'Unknown'),
@@ -76,8 +74,25 @@ if not df_all.empty:
     df_all = df_all.sort_values('dt_obj')
     df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
     
-    # --- 🚀 FIX 1: ALTERNATING LOGIC (Odd = Check-in, Even = Leave) ---
-    df_all['flow_type'] = df_all['tap_rank'].apply(lambda x: "Check-in" if x % 2 != 0 else "Leave")
+    # --- 🚀 FIX: ULTIMATE SMART FLOW LOGIC ---
+    def determine_flow(row):
+        stat = str(row.get('status', '')).lower()
+        
+        # 1. 缺席的人没有物理动作
+        if 'absent' in stat:
+            return "--"
+            
+        # 2. 手动标记为“离开课堂”，强制为退场动作
+        if stat == 'leave':
+            return "Check-out (Early)"
+            
+        # 3. 硬件打卡的正常交替逻辑 (奇数进，偶数出)
+        if row['tap_rank'] % 2 != 0:
+            return "Check-in"
+        else:
+            return "Check-out"
+            
+    df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
 
 # ==========================================================
 # 3. SIDEBAR: REMOTE HARDWARE COMMAND CENTER
@@ -86,7 +101,6 @@ st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
 
 with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
-    # Mode selection: Enrollment vs Attendance
     target_mode = st.selectbox("Switch Mode:", ["Attendance", "Enrollment"], 
                                index=0 if current_hw_mode == "Attendance" else 1)
     if st.sidebar.button("Apply Mode Update"):
@@ -95,15 +109,11 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
 
     st.markdown("---")
     if st.sidebar.button("🔔 Trigger Remote Buzzer"):
-        # Set to True to alert the hardware
         control_ref.update({"trigger_buzzer": True})
-        # Wait for 1 second so the Pi has time to catch the signal
         time.sleep(1) 
-        # Set back to False to stop the buzzer
         control_ref.update({"trigger_buzzer": False})
         st.sidebar.success("Buzzer signal sent!")
         
-    # Global lockdown toggle
     is_locked = st.sidebar.toggle("🔒 Sensor Lockdown", value=hw_state.get('is_locked', False))
     control_ref.update({"is_locked": is_locked})
 
@@ -113,7 +123,6 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    # --- ENROLLMENT MODE: REGISTRY & PROFILE MGMT ---
     tab_reg, tab_list = st.tabs(["➕ Student Registration", "🗃️ Master Registry"])
     
     with tab_reg:
@@ -129,19 +138,16 @@ if current_hw_mode == "Enrollment":
                 n_fpid = st.text_input("Biometric Token (Alphanumeric):")
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-            # Conflict check for fingerprint slot
             existing_fpids = [v.get('fingerprint_id') for v in cards_raw.values()] if isinstance(cards_raw, dict) else []
             if n_fpid and n_fpid in existing_fpids:
                 st.error(f"⚠️ Biometric ID '{n_fpid}' is already occupied!")
 
             if st.form_submit_button("Finalize Cloud Registration"):
                 if n_id and n_name:
-                    # Sync to /students as primary record
                     db.reference(f'/students/{n_id}').update({
                         "student_id": n_id, "name": n_name, "rfid": n_rfid if n_rfid else "Unlinked", 
                         "course": n_course, "attendance_count": 0, "registered_date": n_date
                     })
-                    # Sync to /cards only if hardware data is provided
                     if n_rfid and n_fpid and n_fpid not in existing_fpids:
                         db.reference('/cards').push().set({
                             "student_id": n_id, "name": n_name, "card_id": n_rfid, 
@@ -150,7 +156,6 @@ if current_hw_mode == "Enrollment":
                     st.success(f"Profile {n_id} established!"); st.rerun()
 
     with tab_list:
-        # LOGICAL FIX: Pull from /students to show ALL users immediately
         if students_data:
             master_registry = []
             for sid, info in students_data.items():
@@ -170,19 +175,16 @@ if current_hw_mode == "Enrollment":
                 st.warning(f"Profile {del_id} erased from cloud database."); st.rerun()
 
 else:
-    # --- ATTENDANCE MODE: MONITORING, MANAGEMENT & ANALYTICS ---
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
     
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
         if not df_all.empty:
-            # Displays smart flow_type to satisfy Check-in/Leave logic
             st.dataframe(df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']]
                          .sort_values('formatted_time', ascending=False), use_container_width=True)
         else: st.info("Waiting for hardware synchronization...")
 
     with tab_console:
-        # FEATURE: MANUALLY ADD/EDIT/DELETE LOGS REGARDLESS OF SCAN
         st.header("🛠️ Attendance Management Console")
         c_add, c_mod = st.columns(2)
         
@@ -192,7 +194,6 @@ else:
                 m_sid = st.selectbox("Target Profile:", sorted(students_data.keys()))
                 m_date = st.date_input("Date:", datetime.now())
                 m_time = st.time_input("Time:", dt_time(9, 0))
-                # 🚀 新增 "leave" 选项
                 m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
                 if st.form_submit_button("Force Sync Record"):
                     dt_combined = datetime.combine(m_date, m_time)
@@ -212,7 +213,6 @@ else:
                 row = df_all[log_labels == to_manage].iloc[0]
                 
                 with st.expander("Update Status"):
-                    # 🚀 同步新增 "leave" 选项
                     new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
                     if st.button("Update This Specific Entry"):
                         db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
@@ -223,17 +223,18 @@ else:
                     st.warning("Entry removed."); st.rerun()
 
     with tab_m3:
-        # MODULE 3 ANALYTICS: Visualizations as per assignment rules
         st.header("📊 Module 3: Advanced Analytics Interface")
         if not df_all.empty:
-            # 4.1 STAY DURATION BAR CHART
             st.subheader("⏱️ Daily Attendance Duration Analysis")
             duration_data = []
             today_str = datetime.now().strftime("%Y-%m-%d")
+            
+            # 🚀 排除缺席数据：确保缺席的人不会被错误计算时长
+            valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
+            
             for sid in students_data.keys():
-                p_today = df_all[(df_all['student_id'] == sid) & (df_all['record_date'] == today_str)].sort_values('dt_obj')
+                p_today = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_str)].sort_values('dt_obj')
                 if len(p_today) >= 2:
-                    # Duration Logic: Last tap - First tap of the day
                     hrs = round((p_today.iloc[-1]['dt_obj'] - p_today.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
                     duration_data.append({"ID": sid, "Name": students_data[sid].get('name'), "Duration_Hrs": hrs})
             
@@ -242,29 +243,23 @@ else:
                 fig_dur, ax_dur = plt.subplots(figsize=(10, 4))
                 sns.barplot(x="ID", y="Duration_Hrs", data=viz_df, palette="viridis", ax=ax_dur)
                 st.pyplot(fig_dur)
-            else: st.info("Requires both Check-in & Leave scans for duration plotting.")
+            else: st.info("Requires both Check-in & Check-out scans for duration plotting.")
 
-            # 4.2 STATUS DISTRIBUTION PIE CHART
             st.subheader("Lecture Status Distribution")
             status_counts = df_all['status'].value_counts()
             fig_pie, ax_pie = plt.subplots()
             ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'])
             st.pyplot(fig_pie)
             
-            # --- NEW ADDITION: 4.3 DAILY ATTENDANCE TREND (STATUS COMPARISON) ---
             st.markdown("---")
             st.subheader("📈 Daily Attendance Trend (Status Comparison)")
             
-            # Smart logic: Drop duplicates by Date, Student ID, and Status to prevent double counting
             unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
-            
             if not unique_daily.empty:
-                # Group by date and status to count students
                 daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Student_Count')
                 daily_trend = daily_trend.sort_values('record_date')
                 
                 fig_line, ax_line = plt.subplots(figsize=(10, 4))
-                # Key change: Add hue='status' to plot different lines for present, absent, late, leave
                 sns.lineplot(data=daily_trend, x='record_date', y='Student_Count', hue='status', 
                              marker='o', palette='Set2', ax=ax_line)
                 
@@ -272,17 +267,14 @@ else:
                 ax_line.set_ylabel("Number of Students")
                 ax_line.set_title("Attendance vs Absence Over Time")
                 plt.xticks(rotation=45)
-                # Move legend outside the plot to prevent overlap
                 plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left') 
-                
                 st.pyplot(fig_line)
             else:
                 st.info("Not enough data to plot the daily trend.")
 
             st.markdown("---")
-            # 4.4 PERMANENT RECORD BRIDGE (Excel archival)
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df_all[['formatted_time', 'name', 'student_id', 'status', 'verification_method']].to_excel(writer, index=False)
+                df_all[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(writer, index=False)
                 writer.close()
             st.download_button("📥 Download Official Report (.xlsx)", data=buffer.getvalue(), file_name="Report.xlsx", mime="application/vnd.ms-excel")
