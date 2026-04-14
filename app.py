@@ -146,7 +146,7 @@ if current_hw_mode == "Enrollment":
                     fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
                     has_conflict = False
                     if n_rfid and n_rfid in rfid_owners and rfid_owners[n_rfid] != n_id:
-                        st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by ID: {rfid_owners[n_rfid]}提升"); has_conflict = True
+                        st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by ID: {rfid_owners[n_rfid]}"); has_conflict = True
                     if n_fpid and n_fpid in fpid_owners and fpid_owners[n_fpid] != n_id:
                         st.error(f"❌ **Hardware Conflict:** FP Token `{n_fpid}` is already in use by ID: {fpid_owners[n_fpid]}"); has_conflict = True
                     if n_id in students_data and n_name:
@@ -207,43 +207,22 @@ if current_hw_mode == "Enrollment":
                     with c2:
                         if st.button("❌ Cancel"): st.session_state['delete_target'] = None; st.rerun()
 
-    # ==========================================================
-    # ⚙️ CLEANER tab_diag: AUTOMATED MONITORING ONLY
-    # ==========================================================
     with tab_diag:
-        st.subheader("⚙️ Real-time System Monitoring")
-        st.write("Live status tracking for the physical IoT hardware.")
-
-        # --- Automated Metrics ---
-        m1, m2, m3 = st.columns(3)
-        
-        last_seen_ts = db.reference('/system_status/last_seen').get() or 0
-        is_online = (time.time() - last_seen_ts) < 60 
-        m1.metric("Hardware Status", "ONLINE 🟢" if is_online else "OFFLINE 🔴")
-        
-        fp_list_raw = db.reference('/system_status/fp_ids').get() or []
-        used_slots = len(fp_list_raw) if isinstance(fp_list_raw, list) else 0
-        m2.metric("FP Storage Usage", f"{used_slots} / 127 Slots")
-        
-        m3.metric("Network Stability", "Stable ✅" if is_online else "Check Connection ⚠️")
-
-        st.write("---")
-
-        # --- Live Logs (Terminal Style) ---
-        with st.container(border=True):
-            st.markdown("#### 📟 Live Hardware Event Log")
-            # This proves the system is "talking" to the cloud
-            raw_logs = db.reference('/system_status/logs').get() or ["System waiting for hardware heartbeat..."]
-            log_box = ""
-            log_entries = list(raw_logs.values()) if isinstance(raw_logs, dict) else list(raw_logs)
-            for entry in log_entries[-8:]: 
-                log_box += f"> {entry}\n"
-            st.code(log_box, language="bash")
-            
-            # Visual storage bar
-            st.progress(min(used_slots / 127, 1.0), text=f"Fingerprint memory: {round((used_slots/127)*100, 1)}%")
-
-        st.caption(f"Last heartbeat from Raspberry Pi: {datetime.fromtimestamp(last_seen_ts).strftime('%Y-%m-%d %H:%M:%S') if last_seen_ts else 'Waiting...'}")
+        st.subheader("⚙️ System Diagnostics")
+        d1, d2 = st.columns(2)
+        with d1:
+            st.markdown("#### 1. Hardware Sensor Ping")
+            if st.button("🔍 Query Sensor FP IDs", use_container_width=True): control_ref.update({"request_id_list": True})
+            fp_status = db.reference('/system_status/fp_ids').get()
+            if fp_status: st.code(f"Occupied Slots:\n{fp_status}", language="json")
+        with d2:
+            st.markdown("#### 2. Cloud DB ID Lookup")
+            if profile_mapping:
+                sl = st.selectbox("Search Profile:", ["-- Select --"] + sorted(profile_mapping.keys()))
+                if sl != "-- Select --":
+                    real_sid = profile_mapping[sl]
+                    c_info = next((v for v in cards_raw.values() if v.get('student_id') == real_sid), None)
+                    st.success(f"💳 **RFID:** `{c_info.get('card_id') if c_info else 'N/A'}`\n\n👆 **FP ID:** `{c_info.get('fingerprint_id') if c_info else 'N/A'}`")
 
 else:
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
@@ -274,24 +253,22 @@ else:
 
     with tab_console:
         st.header("🛠️ Attendance Management Console")
-        st.write("---")
-        st.markdown("<br>", unsafe_allow_html=True) 
-        c_add, c_mod = st.columns(2, gap="large") 
+        c_add, c_mod = st.columns(2, gap="large")
         with c_add:
             with st.container(border=True):
                 st.markdown("### ➕ Create Manual Record")
-                sc = st.text_input("🔍 Search Profile:", key="sc_create", label_visibility="collapsed")
+                sc = st.text_input("🔍 Search Student:", key="sc_create", label_visibility="collapsed")
                 with st.form("force_add_form", clear_on_submit=True):
                     if profile_mapping:
                         opts = sorted(profile_mapping.keys())
                         if sc: opts = [p for p in opts if sc.lower() in p.lower()]
                         if opts:
-                            m_disp = st.selectbox("Select Student:", opts)
+                            m_disp = st.selectbox("Selected Student:", opts)
                             dc, tc = st.columns(2)
                             m_date = dc.date_input("Date:", datetime.now(), key="ma_date")
                             m_time = tc.time_input("Time:", dt_time(9, 0))
                             m_status = st.selectbox("Status:", ["present", "absent", "late", " MEDICAL absent", "leave"], format_func=display_status_emoji)
-                            if st.form_submit_button("Force Sync New Record", type="primary"):
+                            if st.form_submit_button("Force Sync", type="primary"):
                                 m_sid = profile_mapping[m_disp]
                                 db.reference(f'/attendance/{m_date.strftime("%Y-%m-%d")}').push().set({'student_id': m_sid, 'name': students_data[m_sid].get('name'), 'status': m_status, 'timestamp': int(datetime.combine(m_date, m_time).timestamp()), 'verification_method': "Manual_Admin"})
                                 st.rerun()
@@ -302,64 +279,100 @@ else:
                     sa = st.checkbox("🕰️ View All History")
                     f1, f2 = st.columns([1.5, 2])
                     md = f1.date_input("Filter Date:", datetime.now(), disabled=sa)
-                    fo = ["-- All Students --"] + sorted(profile_mapping.keys())
+                    fo = ["-- All --"] + sorted(profile_mapping.keys())
                     ms = f2.selectbox("Filter Student:", fo)
                     f_df = df_all.copy() if sa else df_all[df_all['record_date'] == md.strftime("%Y-%m-%d")]
-                    if ms != "-- All Students --": f_df = f_df[f_df['student_id'] == profile_mapping[ms]]
+                    if ms != "-- All --": f_df = f_df[f_df['student_id'] == profile_mapping[ms]]
                     if not f_df.empty:
                         lbls = f_df['formatted_time'] + " | " + f_df['name'] + " (" + f_df['status'].apply(display_status_emoji) + ")"
-                        to_m = st.selectbox("Records Selector:", lbls.tolist(), label_visibility="collapsed")
+                        to_m = st.selectbox("Select Record:", lbls.tolist(), label_visibility="collapsed")
                         row = f_df[lbls == to_m].iloc[0]
-                        with st.expander("✏️ Update status", expanded=True):
-                            ns = st.selectbox("Change to:", ["present", "absent", "late", " MEDICAL absent", "leave"], format_func=display_status_emoji)
-                            if st.button("Submit Status Update", type="secondary"): 
-                                db.reference(f'/attendance/{row["firebase_path"]}').update({'status': ns, 'verification_method': "Admin_Manual"})
-                                st.rerun()
-                        if st.button("🗑️ Permanently Delete Entry", key="del_ent"): 
-                            db.reference(f'/attendance/{row["firebase_path"]}').delete()
-                            st.rerun()
-                    else: st.info("No records match filters.")
-                else: st.info("No attendance records available.")
+                        with st.expander("Update status", expanded=True):
+                            ns = st.selectbox("New status:", ["present", "absent", "late", " MEDICAL absent", "leave"], format_func=display_status_emoji)
+                            if st.button("Update"): db.reference(f'/attendance/{row["firebase_path"]}').update({'status': ns, 'verification_method': "Admin_Manual"}); st.rerun()
+                        if st.button("🗑️ Delete"): db.reference(f'/attendance/{row["firebase_path"]}').delete(); st.rerun()
 
+    # ==========================================================
+    # 📊 tab_m3: REDESIGNED ADVANCED ANALYTICS INTERFACE
+    # ==========================================================
     with tab_m3:
         st.header("📊 Module 3: Advanced Analytics Interface")
+        st.write("Real-time behavioral insights and student performance tracking.")
+        
         if not df_all.empty:
+            # 🚀 SECTION 1: GLOBAL TREND (FULL WIDTH)
             with st.container(border=True):
                 st.subheader("📈 Daily Attendance Trend (Interactive)")
                 unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
                 if not unique_daily.empty:
                     daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
                     chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
+                    # Using Streamlit Native Area Chart for a "Modern" look
                     st.area_chart(chart_data, use_container_width=True)
 
+            # 🚀 SECTION 2: SIDE-BY-SIDE ANALYTICS (COLUMNS)
             col_a, col_b = st.columns(2, gap="medium")
+            
             with col_a:
                 with st.container(border=True):
                     st.subheader("⏱️ Stay Duration Analysis")
+                    st.write("Hours spent in lecture (First tap to Last tap)")
                     duration_data = []
                     today_str = datetime.now().strftime("%Y-%m-%d")
+                    # Exclude Medical/Absents for duration
                     valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
+                    
                     for sid in students_data.keys():
                         p_today = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_str)].sort_values('dt_obj')
                         if len(p_today) >= 2:
                             hrs = round((p_today.iloc[-1]['dt_obj'] - p_today.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
                             duration_data.append({"ID": sid, "Hrs": hrs})
-                    if duration_data: st.bar_chart(pd.DataFrame(duration_data).set_index('ID'), use_container_width=True)
-                    else: st.info("Requires multiple logs for today.")
+                    
+                    if duration_data:
+                        dur_df = pd.DataFrame(duration_data)
+                        # Switch to Native Bar Chart for better interactivity
+                        st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
+                    else:
+                        st.info("Insufficient tap-data (Need Check-in & Check-out) for today.")
 
             with col_b:
                 with st.container(border=True):
                     st.subheader("🍕 Status Composition")
+                    st.write("Overall class participation distribution")
                     status_counts = df_all['status'].value_counts()
+                    
+                    # Matplotlib can look good if we style it for dark mode
                     fig_pie, ax_pie = plt.subplots(figsize=(5, 5))
-                    fig_pie.patch.set_facecolor('#0e1117') 
-                    status_counts.plot.pie(autopct='%1.1f%%', colors=['#2ecc71', '#e74c3c', '#f1c40f', '#3498db', '#95a5a6'], ax=ax_pie, textprops={'color':"w"}, startangle=90, wedgeprops={'edgecolor': '#0e1117'})
-                    ax_pie.set_ylabel(''); st.pyplot(fig_pie)
+                    fig_pie.patch.set_facecolor('#0e1117') # Match Streamlit Dark Mode
+                    ax_pie.set_facecolor('#0e1117')
+                    
+                    colors = ['#2ecc71', '#e74c3c', '#f1c40f', '#3498db', '#95a5a6']
+                    status_counts.plot.pie(
+                        autopct='%1.1f%%', 
+                        colors=colors, 
+                        ax=ax_pie, 
+                        textprops={'color':"w"}, 
+                        startangle=90, 
+                        wedgeprops={'edgecolor': '#0e1117'}
+                    )
+                    ax_pie.set_ylabel('')
+                    st.pyplot(fig_pie)
 
+            # 🚀 SECTION 3: SYSTEM ARCHIVE (BOTTOM)
             with st.container(border=True):
                 st.subheader("📥 Data Export Center")
+                st.write("Generate and download the official lecture attendance report.")
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    # Export the clean raw data
                     df_all[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(writer, index=False)
-                st.download_button(label="📂 Download Full Attendance Report (.xlsx)", data=buffer.getvalue(), file_name=f"Report_{datetime.now().strftime('%Y%m%d')}.xlsx", use_container_width=True)
-        else: st.warning("No analytics available yet.")
+                
+                st.download_button(
+                    label="📂 Download Full Attendance Report (.xlsx)",
+                    data=buffer.getvalue(),
+                    file_name=f"Smart_Campus_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.ms-excel",
+                    use_container_width=True
+                )
+        else:
+            st.warning("No analytics available. Synchronize hardware logs first.")
