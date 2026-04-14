@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, db
-import plotly.express as px  # 🚀 NEW: 更高级的交互式绘图引擎
+import plotly.express as px
 from datetime import datetime, time as dt_time
 import time
 import io
@@ -327,29 +327,13 @@ else:
                 else: st.info("No attendance records in database.")
 
     # ==========================================================
-    # 📊 tab_m3: REDESIGNED ADVANCED ANALYTICS INTERFACE (PLOTLY)
+    # 📊 tab_m3: REDESIGNED ADVANCED ANALYTICS INTERFACE
     # ==========================================================
     with tab_m3:
         st.header("📊 Advanced Analytics Dashboard")
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
-            
-            # 🚀 1. OVERVIEW METRICS
-            st.markdown("##### 📌 High-Level Overview")
-            a_col1, a_col2, a_col3, a_col4 = st.columns(4)
-            
-            total_records = len(df_all)
-            present_total = len(df_all[df_all['status'] == 'present'])
-            overall_rate = round((present_total / total_records) * 100, 1) if total_records > 0 else 0
-            
-            a_col1.metric("Total Tap Records", total_records)
-            a_col2.metric("Overall Present Rate", f"{overall_rate}%")
-            a_col3.metric("Active Students Tracked", df_all['student_id'].nunique())
-            a_col4.metric("Days Tracked", df_all['record_date'].nunique())
-            
-            st.write("---")
-
             # 🎨 Theme Settings for Plotly
             color_map = {
                 'present': '#2ecc71',
@@ -359,30 +343,17 @@ else:
                 'leave': '#3498db'
             }
 
-            # 🚀 2. TREND CHART (FULL WIDTH, PLOTLY AREA)
+            # 🚀 1. TREND CHART (REVERTED TO NATIVE BAR CHART)
             with st.container(border=True):
                 st.subheader("📈 Daily Attendance Trend")
                 unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
                 if not unique_daily.empty:
                     daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
+                    # This will create the original blocky stacked bar chart you preferred
+                    chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
+                    st.bar_chart(chart_data, use_container_width=True)
                     
-                    fig_trend = px.area(
-                        daily_trend, 
-                        x="record_date", 
-                        y="Count", 
-                        color="status",
-                        color_discrete_map=color_map
-                    )
-                    fig_trend.update_layout(
-                        xaxis_title="", 
-                        yaxis_title="Number of Students",
-                        margin=dict(l=0, r=0, t=20, b=0),
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        paper_bgcolor="rgba(0,0,0,0)"
-                    )
-                    st.plotly_chart(fig_trend, use_container_width=True)
-                    
-            # 🚀 3. COLUMNS (DURATION & COMPOSITION)
+            # 🚀 2. COLUMNS (DURATION & COMPOSITION)
             cola, colb = st.columns(2, gap="large")
             
             with cola:
@@ -397,21 +368,13 @@ else:
                         p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_s)].sort_values('dt_obj')
                         if len(p_t) >= 2: 
                             hrs = round((p_t.iloc[-1]['dt_obj'] - p_t.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
-                            dur_data.append({"Name": students_data[sid].get('name'), "Hrs": hrs})
+                            # 🚀 REVERTED: Using Student ID instead of Name for better privacy and aesthetics
+                            dur_data.append({"ID": sid, "Hrs": hrs}) 
                             
                     if dur_data: 
                         dur_df = pd.DataFrame(dur_data)
-                        fig_bar = px.bar(
-                            dur_df, x="Name", y="Hrs", 
-                            text="Hrs", color="Hrs", color_continuous_scale="Viridis"
-                        )
-                        fig_bar.update_layout(
-                            xaxis_title="", yaxis_title="Hours",
-                            coloraxis_showscale=False,
-                            margin=dict(l=0, r=0, t=20, b=0),
-                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
-                        )
-                        st.plotly_chart(fig_bar, use_container_width=True)
+                        # 🚀 REVERTED: Back to the clean native Streamlit bar chart
+                        st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
                     else: 
                         st.info("💡 Check-in and Check-out logs needed for today to calculate duration.")
                         
@@ -419,12 +382,14 @@ else:
                 with st.container(border=True):
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
+                    
+                    # 🚀 RETAINED: The beautiful Plotly Donut Chart
                     s_c = df_all['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
                     
                     fig_pie = px.pie(
                         s_c, values="Count", names="Status",
-                        hole=0.45, # Creates the Donut Shape
+                        hole=0.45, 
                         color="Status", color_discrete_map=color_map
                     )
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
@@ -435,7 +400,7 @@ else:
                     )
                     st.plotly_chart(fig_pie, use_container_width=True)
                     
-            # 🚀 4. EXPORT
+            # 🚀 3. EXPORT
             with st.container(border=True):
                 st.subheader("📥 Data Export Center")
                 st.write("Generate and download the official lecture attendance report.")
