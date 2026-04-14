@@ -80,7 +80,6 @@ with st.sidebar.expander("👤 Student Registration / FP Mapping", expanded=Fals
     reg_id = st.text_input("Student ID (Unique):")
     reg_name = st.text_input("Full Name:")
     reg_rfid = st.text_input("RFID Card UID:")
-    # Mapping Fingerprint ID stored on R307 sensor
     reg_fpid = st.number_input("Sensor Fingerprint ID (1-127):", min_value=1, max_value=127, step=1)
     
     if st.button("Sync Profile to Cloud"):
@@ -91,16 +90,26 @@ with st.sidebar.expander("👤 Student Registration / FP Mapping", expanded=Fals
             })
             st.sidebar.success(f"Profile for {reg_id} updated!"); st.rerun()
 
-# --- MODULE C: ATTENDANCE MANAGEMENT ---
-with st.sidebar.expander("📝 Manual Logs & Deletion", expanded=False):
-    # Manual Add
-    target_student = st.selectbox("Manual Sign-in:", list(students_data.keys())) if students_data else None
-    if st.button("Force Mark Present") and target_student:
+# --- MODULE C: ATTENDANCE MANAGEMENT (Manual Entry & Status) ---
+with st.sidebar.expander("📝 Manual Logs & Deletion", expanded=True):
+    st.subheader("Manual Record Entry")
+    target_student = st.selectbox("Select Student:", list(students_data.keys())) if students_data else None
+    
+    # Feature: Admin choice for status (出席/缺席/迟到)
+    target_status = st.selectbox("Set Attendance Status:", ["present", "absent", "late"])
+    
+    if st.button("Confirm Manual Log") and target_student:
         today_str = datetime.now().strftime("%Y-%m-%d")
         db.reference(f'/attendance/{today_str}').push().set({
-            'student_id': target_student, 'name': students_data[target_student].get('name', 'N/A'),
-            'status': 'present', 'timestamp': int(time.time()), 'date': today_str, 'verification_method': "Manual"
-        }); st.rerun()
+            'student_id': target_student, 
+            'name': students_data[target_student].get('name', 'N/A'),
+            'status': target_status, 
+            'timestamp': int(time.time()), 
+            'date': today_str, 
+            'verification_method': "Manual_Override"
+        })
+        st.sidebar.success(f"Marked {target_student} as {target_status}")
+        st.rerun()
     
     st.markdown("---")
     # Delete Record
@@ -118,10 +127,10 @@ tab_monitor, tab_analytics = st.tabs(["📺 Live Monitoring", "📈 Advanced Ins
 
 # --- TAB 1: LIVE MONITORING ---
 with tab_monitor:
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Registered Students", len(students_data))
-    c2.metric("Total Logs Count", len(df))
-    c3.metric("System Status", "🔒 LOCKED" if lock_status else "🟢 ACTIVE")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Students Registered", len(students_data))
+    m2.metric("Total Logs Count", len(df))
+    m3.metric("System Status", "🔒 LOCKED" if lock_status else "🟢 ACTIVE")
 
     st.markdown("---")
     col_logs, col_pie = st.columns([2, 1])
@@ -146,11 +155,13 @@ with tab_analytics:
     st.subheader("🚩 Missing Students Today")
     today_date = datetime.now().strftime("%Y-%m-%d")
     all_uids = set(students_data.keys())
-    present_today_uids = set(df[df['record_date'] == today_date]['student_id'].unique()) if not df.empty else set()
+    
+    # Optimization: Filter only for those who are marked 'present' or 'late' today
+    present_today_uids = set(df[(df['record_date'] == today_date) & (df['status'] != 'absent')]['student_id'].unique()) if not df.empty else set()
     missing_ids = all_uids - present_today_uids
     
     if missing_ids:
-        st.error(f"Alert: {len(missing_ids)} students have not checked in today.")
+        st.error(f"Alert: {len(missing_ids)} students are missing from today's session.")
         st.write(f"Missing IDs: {', '.join(missing_ids)}")
     else:
         st.success("Perfect Attendance for Today!")
@@ -162,7 +173,7 @@ with tab_analytics:
     if not df.empty:
         df['hour'] = df['timestamp'].dt.hour
         st.bar_chart(df.groupby('hour').size())
-        st.caption("Use this chart to identify peak arrival windows for campus resource planning.")
+        st.caption("Hourly distribution helps optimize campus security and resource allocation.")
 
     st.markdown("---")
 
@@ -172,9 +183,8 @@ with tab_analytics:
     if target != "Select ID":
         personal = df[df['student_id'] == target]
         if not personal.empty:
-            # Calculate Consistency
-            days_campus_active = len(df['record_date'].unique())
-            attendance_rate = (len(personal['record_date'].unique()) / days_active) * 100 if days_active > 0 else 0
-            st.metric(f"Loyalty/Consistency for {target}", f"{attendance_rate:.1f}%")
+            days_active = len(df['record_date'].unique())
+            attendance_rate = (len(personal[personal['status'] != 'absent']['record_date'].unique()) / days_active) * 100 if days_active > 0 else 0
+            st.metric(f"Loyalty Consistency for {target}", f"{attendance_rate:.1f}%")
             st.table(personal[['timestamp', 'status', 'arrival_status']].sort_values(by='timestamp', ascending=False))
         else: st.info("No records found for this student.")
