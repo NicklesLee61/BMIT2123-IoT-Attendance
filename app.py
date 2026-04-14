@@ -180,8 +180,11 @@ else:
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
         if not df_all.empty:
-            st.dataframe(df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']]
-                         .sort_values('formatted_time', ascending=False), use_container_width=True)
+            # 🚀 VISUAL FIX: Reset Index for clean 1, 2, 3... numbering
+            display_df = df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False)
+            display_df = display_df.reset_index(drop=True)
+            display_df.index = display_df.index + 1
+            st.dataframe(display_df, use_container_width=True)
         else: st.info("Waiting for hardware synchronization...")
 
     with tab_console:
@@ -251,24 +254,19 @@ else:
             ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'])
             st.pyplot(fig_pie)
             
+            # --- UPGRADED 4.3: INTERACTIVE DAILY TREND (STREAMLIT NATIVE) ---
             st.markdown("---")
-            st.subheader("📈 Daily Attendance Trend (Status Comparison)")
+            st.subheader("📈 Daily Attendance Trend (Interactive)")
             
             unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
+            
             if not unique_daily.empty:
+                # Group by date and status
                 daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Student_Count')
-                daily_trend = daily_trend.sort_values('record_date')
-                
-                fig_line, ax_line = plt.subplots(figsize=(10, 4))
-                sns.lineplot(data=daily_trend, x='record_date', y='Student_Count', hue='status', 
-                             marker='o', palette='Set2', ax=ax_line)
-                
-                ax_line.set_xlabel("Date")
-                ax_line.set_ylabel("Number of Students")
-                ax_line.set_title("Attendance vs Absence Over Time")
-                plt.xticks(rotation=45)
-                plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left') 
-                st.pyplot(fig_line)
+                # Pivot table to make status columns for the bar chart
+                chart_data = daily_trend.pivot(index='record_date', columns='status', values='Student_Count').fillna(0)
+                # Render using Streamlit's native interactive bar chart (supports dark mode & tooltips)
+                st.bar_chart(chart_data, use_container_width=True)
             else:
                 st.info("Not enough data to plot the daily trend.")
 
