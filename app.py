@@ -7,19 +7,22 @@ from datetime import datetime
 import time
 
 # ==========================================
-# 1. SYSTEM CONFIG & CLOUD AUTHENTICATION
+# 1. SYSTEM AUTHENTICATION
 # ==========================================
-st.set_page_config(page_title="IoT Smart Campus Portal", layout="wide", page_icon="🛡️")
-st.title("🛡️ BMIT2123: All-in-One Smart Campus Management")
+st.set_page_config(page_title="IoT Admin Command Center", layout="wide", page_icon="🛡️")
+st.title("🛡️ BMIT2123: Professional IoT & Biometric Management")
 
-# Initialize Firebase securely
+# Initialize Firebase using Secrets for Cloud Deployment
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
+            # Production: Streamlit Cloud Secrets
             cred_dict = dict(st.secrets["firebase"])
+            # Essential: Handle the \n in private_key
             cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(cred_dict)
         else:
+            # Local Development
             cred = credentials.Certificate("service-account-key.json")
             
         firebase_admin.initialize_app(cred, {
@@ -29,16 +32,17 @@ if not firebase_admin._apps:
         st.error(f"Cloud Connection Failed: {e}"); st.stop()
 
 # ==========================================
-# 2. DATA PROCESSING ENGINE
+# 2. DATA ENGINE (Logic Flattening)
 # ==========================================
-# Fetch dynamic data from Cloud
+# Fetching metadata from Firebase nodes
 students_data = db.reference('/students').get() or {} 
 cards_data = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
-# Flattening nested Firebase structure
+# Process Nested Attendance Logs
 all_records = []
 if attendance_raw:
+    # Flatten structure: { "date": { "record_id": {data} } }
     for date_key, daily_data in attendance_raw.items():
         if isinstance(daily_data, dict):
             for record_id, info in daily_data.items():
@@ -48,144 +52,150 @@ if attendance_raw:
 
 df = pd.DataFrame(all_records)
 if not df.empty:
+    # Convert Epoch integer to Datetime object
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s', errors='coerce')
 
 # ==========================================
-# 3. SIDEBAR: ADMIN COMMAND CENTER
+# 3. SIDEBAR: REMOTE CONTROL
 # ==========================================
 st.sidebar.title("🎮 Command Center")
 
-# --- MODULE A: REMOTE HARDWARE CONTROL ---
-with st.sidebar.expander("🛠️ Hardware Controls", expanded=False):
-    sys_mode = st.selectbox("Device Mode:", ["Attendance", "Enrollment"])
-    if st.button("Apply Mode"): db.reference('/control/mode').set(sys_mode)
+with st.sidebar.expander("🛠️ Hardware Commands", expanded=False):
+    # Mode selection logic
+    sys_mode = st.selectbox("Operation Mode:", ["Attendance", "Enrollment"])
+    if st.button("Push Mode Update"): 
+        db.reference('/control/mode').set(sys_mode)
     
-    lock_status = st.toggle("🔒 Emergency System Lock")
-    db.reference('/control/is_locked').set(lock_status)
+    # Emergency Lockdown
+    is_locked = st.toggle("🔒 Emergency Device Lock")
+    db.reference('/control/is_locked').set(is_locked)
     
+    # Remote Buzzer Trigger
     if st.button("🔔 Trigger Remote Bell"):
         db.reference('/control/trigger_buzzer').set(True)
         time.sleep(1); db.reference('/control/trigger_buzzer').set(False)
 
-# --- MODULE B: 2FA ENROLLMENT (CARDS & FINGERPRINT) ---
-with st.sidebar.expander("👤 Register New Card/Student", expanded=False):
-    reg_id = st.text_input("Student ID (Unique):")
-    reg_name = st.text_input("Full Name:")
-    reg_rfid = st.text_input("RFID Card UID:")
-    reg_course = st.text_input("Course Name:")
-    reg_fpid = st.number_input("Sensor Fingerprint ID (1-127):", min_value=1, max_value=127, step=1)
-    
-    if st.button("Sync Profile to Cloud"):
-        if reg_id and reg_name:
-            db.reference(f'/cards/{reg_rfid}').update({
-                "student_id": reg_id, "name": reg_name, "card_id": reg_rfid,
-                "course": reg_course, "fingerprint_id": reg_fpid,
-                "registered_date": datetime.now().isoformat()
-            })
-            db.reference(f'/students/{reg_id}').update({
-                "student_id": reg_id, "name": reg_name, "rfid": reg_rfid, "course": reg_course
-            })
-            st.sidebar.success(f"Profile for {reg_id} updated!"); st.rerun()
-
-# --- MODULE C: ATTENDANCE MANAGEMENT ---
-with st.sidebar.expander("📝 Manual Logs & Deletion", expanded=True):
-    st.subheader("Manual Record Entry")
-    target_student = st.selectbox("Select Student:", list(students_data.keys())) if students_data else None
-    target_status = st.selectbox("Set Status:", ["present", "absent", "late"])
-    
-    if st.button("Confirm Manual Log") and target_student:
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        db.reference(f'/attendance/{today_str}').push().set({
-            'student_id': target_student, 
-            'name': students_data[target_student].get('name', 'N/A'),
-            'status': target_status, 'timestamp': int(time.time()), 'date': today_str, 
-            'verification_method': "Manual_Override"
-        }); st.rerun()
-    
-    st.markdown("---")
-    if not df.empty:
-        df['del_label'] = df['record_date'] + " | " + df['name']
-        to_del = st.selectbox("Select Attendance to Erase:", df['del_label'].tolist())
-        if st.button("🗑️ Confirm Delete Attendance"):
-            path = df[df['del_label'] == to_del]['firebase_path'].values[0]
-            db.reference(f'/attendance/{path}').delete(); st.rerun()
-
 # ==========================================
-# 4. MAIN INTERFACE: TABS & ANALYTICS
+# 4. MAIN INTERFACE: TABS SYSTEM
 # ==========================================
-tab_monitor, tab_cards, tab_analytics = st.tabs(["📺 Live Monitoring", "💳 Card & Biometric DB", "📈 Advanced Insights"])
+tab_monitor, tab_mgmt, tab_analytics = st.tabs(["📺 Live Monitoring", "🗃️ Registry Management", "📈 Insights"])
 
 # --- TAB 1: LIVE MONITORING ---
 with tab_monitor:
     m1, m2, m3 = st.columns(3)
     m1.metric("Students Registered", len(students_data))
     m2.metric("Total Attendance Logs", len(df))
-    m3.metric("System Security", "🔒 LOCKED" if lock_status else "🟢 ACTIVE")
+    m3.metric("System Status", "🔒 LOCKED" if is_locked else "🟢 ACTIVE")
 
     st.markdown("---")
-    col_logs, col_pie = st.columns([2, 1])
-    with col_logs:
+    c1, c2 = st.columns([2, 1])
+    with c1:
         st.subheader("📋 Real-time Logs")
         if not df.empty:
-            # Removed 'arrival_status' column
+            # Table visualization
             st.dataframe(df[['timestamp', 'name', 'status', 'student_id']]
                          .sort_values(by='timestamp', ascending=False), use_container_width=True)
-    with col_pie:
-        st.subheader("Cloud Statistics")
+    with c2:
+        st.subheader("Cloud Analytics")
         if not df.empty:
             counts = df['status'].value_counts()
             fig, ax = plt.subplots()
             ax.pie(counts, labels=counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c'])
             st.pyplot(fig)
 
-# --- TAB 2: CARD & BIOMETRIC DATABASE ---
-with tab_cards:
-    st.header("📇 Physical Card & Fingerprint Registry")
-    if cards_data:
-        cards_list = [v for k, v in cards_data.items()]
-        st.dataframe(pd.DataFrame(cards_list), use_container_width=True)
-        st.markdown("---")
-        card_to_del = st.selectbox("Select Card ID to unregister:", [c['card_id'] for c in cards_list])
-        if st.button("Delete Card Mapping"):
-            db.reference(f'/cards/{card_to_del}').delete(); st.rerun()
-    else:
-        st.info("No physical cards are currently registered.")
-
-# --- TAB 3: ADVANCED INSIGHTS ---
-with tab_analytics:
-    st.header("🔍 Deep Campus Insights")
+# --- TAB 2: PROFESSIONAL REGISTRY MGMT ---
+with tab_mgmt:
+    st.header("🗃️ Biometric & Card Registry")
     
-    # Feature 1: Absence Alert
-    st.subheader("🚩 Missing Students Today")
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    all_uids = set(students_data.keys())
-    present_today_uids = set(df[(df['record_date'] == today_date) & (df['status'] != 'absent')]['student_id'].unique()) if not df.empty else set()
-    missing_ids = all_uids - present_today_uids
-    
-    if missing_ids:
-        st.error(f"Alert: {len(missing_ids)} students have not checked in today.")
-        st.write(f"Missing IDs: {', '.join(missing_ids)}")
-    else:
-        st.success("Perfect Attendance for Today!")
+    # Advanced stats
+    occupied_fpid = [v.get('fingerprint_id') for k, v in cards_data.items() if v.get('fingerprint_id')]
+    col_a, col_b = st.columns(2)
+    col_a.info(f"Stored Fingerprints: {len(occupied_fpid)} / 127")
+    col_b.info(f"Next Suggested ID: {(max(occupied_fpid)+1) if occupied_fpid else 1}")
 
     st.markdown("---")
+    
+    # Console-style management actions
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("➕ 7. Add RFID + Fingerprint Record")
+        with st.form("add_student"):
+            new_id = st.text_input("Student ID (e.g., 24WMR15298):")
+            new_name = st.text_input("Full Name:")
+            new_rfid = st.text_input("RFID UID:")
+            new_course = st.text_input("Course Name:")
+            new_fpid = st.number_input("Sensor Fingerprint ID (1-127):", 
+                                       min_value=1, max_value=127, 
+                                       value=(max(occupied_fpid)+1 if occupied_fpid else 1))
+            if st.form_submit_button("Execute Registration"):
+                if new_id and new_rfid:
+                    # Sync to /cards and /students nodes
+                    db.reference(f'/cards/{new_rfid}').update({
+                        "student_id": new_id, "name": new_name, "card_id": new_rfid,
+                        "course": new_course, "fingerprint_id": new_fpid,
+                        "registered_date": datetime.now().isoformat()
+                    })
+                    db.reference(f'/students/{new_id}').update({
+                        "student_id": new_id, "name": new_name, "rfid": new_rfid, "course": new_course
+                    })
+                    st.success(f"Synced {new_name} to slot #{new_fpid}!"); st.rerun()
 
-    # Feature 2: Peak Check-in Hours
-    st.subheader("⏰ Peak Activity Trends")
+    with col2:
+        st.subheader("🗑️ Delete Operations")
+        # Console Option 2: Delete by FP ID
+        del_fpid = st.number_input("2. Delete fingerprint by ID:", min_value=1, max_value=127)
+        if st.button("Execute FP ID Delete"):
+            target_cards = [k for k, v in cards_data.items() if v.get('fingerprint_id') == del_fpid]
+            for c in target_cards: db.reference(f'/cards/{c}').delete()
+            st.warning(f"ID #{del_fpid} cleared."); st.rerun()
+            
+        st.markdown("---")
+        # Console Option 5: Delete by Selection
+        if not df.empty:
+            st.subheader("📝 Manual Log Management")
+            target_sid = st.selectbox("Select Student for Manual Log:", list(students_data.keys()))
+            target_status = st.selectbox("Status:", ["present", "absent", "late"])
+            if st.button("Confirm Manual Override"):
+                t_str = datetime.now().strftime("%Y-%m-%d")
+                db.reference(f'/attendance/{t_str}').push().set({
+                    'student_id': target_sid, 'name': students_data[target_sid].get('name', 'N/A'),
+                    'status': target_status, 'timestamp': int(time.time()), 'date': t_str, 
+                    'verification_method': "Manual_Admin"
+                }); st.rerun()
+
+    st.markdown("---")
+    # Console Option 4: Show All Records
+    st.subheader("4. Show all RFID records")
+    if cards_data:
+        # Replicating the list format: card_id => [name, card_id, flag, fingerprint_id]
+        display_list = []
+        for uid, v in cards_data.items():
+            display_list.append({
+                "Output Format": f"{uid} => ['{v.get('name')}', '{uid}', 0, {v.get('fingerprint_id')}]",
+                "Name": v.get('name'),
+                "Course": v.get('course'),
+                "Finger_ID": v.get('fingerprint_id')
+            })
+        st.table(pd.DataFrame(display_list))
+
+# --- TAB 3: ANALYTICS (Data Science) ---
+with tab_analytics:
+    st.header("🔍 Campus Data Intelligence")
+    
+    # 🚩 Today's Absence Alert
+    st.subheader("🚩 Missing Students Today")
+    today = datetime.now().strftime("%Y-%m-%d")
+    all_uids = set(students_data.keys())
+    present_today = set(df[(df['record_date'] == today) & (df['status'] != 'absent')]['student_id'].unique()) if not df.empty else set()
+    missing = all_uids - present_today
+    if missing:
+        st.error(f"{len(missing)} students are missing today. IDs: {', '.join(missing)}")
+    else: st.success("100% Attendance!")
+
+    st.markdown("---")
+    # ⏰ Hourly Trends
+    st.subheader("⏰ Peak Activity Trend")
     if not df.empty:
         df['hour'] = df['timestamp'].dt.hour
         st.bar_chart(df.groupby('hour').size())
-
-    st.markdown("---")
-
-    # Feature 3: Student History Lookup
-    st.subheader("🔎 Student History Lookup")
-    target = st.selectbox("Select ID to inspect:", ["Select ID"] + list(students_data.keys()))
-    if target != "Select ID":
-        personal = df[df['student_id'] == target]
-        if not personal.empty:
-            days_active = len(df['record_date'].unique())
-            attendance_rate = (len(personal[personal['status'] != 'absent']['record_date'].unique()) / days_active) * 100 if days_active > 0 else 0
-            st.metric(f"Attendance Rate for {target}", f"{attendance_rate:.1f}%")
-            # Removed 'arrival_status' from the table
-            st.table(personal[['timestamp', 'status']].sort_values(by='timestamp', ascending=False))
