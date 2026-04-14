@@ -49,7 +49,6 @@ if isinstance(cards_raw, dict):
                 "student_id": sid
             }
 
-# Universal display mapping -> "Name (ID)" : "ID"
 profile_mapping = {}
 for sid, info in students_data.items():
     display_name = f"{info.get('name', 'Unknown')} ({sid})"
@@ -218,12 +217,10 @@ else:
         st.subheader("📋 Real-time Smart Attendance Feed")
         
         if not df_all.empty:
-            # 🚀 NEW: TODAY'S KPI METRICS DASHBOARD
             today_str = datetime.now().strftime("%Y-%m-%d")
             today_df = df_all[df_all['record_date'] == today_str]
             
             if not today_df.empty:
-                # 智能去重：获取今天每个学生“最新”的一条记录状态
                 latest_today = today_df.drop_duplicates(subset=['student_id'], keep='last')
                 present_count = len(latest_today[latest_today['status'] == 'present'])
                 absent_count = len(latest_today[latest_today['status'].astype(str).str.contains('absent', case=False)])
@@ -232,17 +229,34 @@ else:
             else:
                 present_count = absent_count = late_count = leave_count = 0
             
-            # 使用四列布局展示漂亮的数据卡片
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("🟢 Present Today", present_count)
             k2.metric("🔴 Absent Today", absent_count)
             k3.metric("🟠 Late Today", late_count)
             k4.metric("🔵 Leave Today", leave_count)
             
-            st.markdown("---") # 分割线，让排版更舒服
+            st.markdown("---") 
 
-            # 之前的表格展示逻辑
-            display_df = df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False)
+            # 🚀 NEW: View-only copy for colorful display (Does not affect Excel)
+            display_df = df_all[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
+            
+            def add_status_emoji(s):
+                s_lower = str(s).lower()
+                if 'present' in s_lower: return f"🟢 {s}"
+                elif 'absent' in s_lower: return f"🔴 {s}"
+                elif 'late' in s_lower: return f"🟠 {s}"
+                elif 'leave' in s_lower: return f"🔵 {s}"
+                return s
+                
+            def add_flow_emoji(f):
+                if 'Check-in' in str(f): return f"🟢 {f}"
+                elif 'Check-out' in str(f): return f"🔵 {f}"
+                elif f == '--': return f"⚪ {f}"
+                return f
+                
+            display_df['status'] = display_df['status'].apply(add_status_emoji)
+            display_df['flow_type'] = display_df['flow_type'].apply(add_flow_emoji)
+            
             display_df = display_df.reset_index(drop=True)
             display_df.index = display_df.index + 1
             st.dataframe(display_df, use_container_width=True)
