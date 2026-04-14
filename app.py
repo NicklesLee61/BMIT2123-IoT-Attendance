@@ -43,6 +43,19 @@ students_data = db.reference('/students').get() or {}
 cards_raw = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
+# --- 🚀 FIX 2: SMART MERGE (Fix missing students in registry) ---
+# If a student exists in /cards but not in /students, force them into students_data
+if isinstance(cards_raw, dict):
+    for push_id, card_info in cards_raw.items():
+        sid = card_info.get('student_id')
+        if sid and sid not in students_data:
+            # Create a fallback profile for the registry & dropdowns
+            students_data[sid] = {
+                "name": card_info.get('name', 'Unknown'),
+                "course": card_info.get('course', 'Unknown'),
+                "student_id": sid
+            }
+
 # Process raw logs for identification and duration calculation
 all_records = []
 if attendance_raw:
@@ -59,10 +72,12 @@ if not df_all.empty:
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
     df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
-    # Logic: Identify tap sequence (1st = Check-in, >=2nd = Leave)
+    # Logic: Identify tap sequence
     df_all = df_all.sort_values('dt_obj')
     df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
-    df_all['flow_type'] = df_all['tap_rank'].apply(lambda x: "Check-in" if x == 1 else "Leave")
+    
+    # --- 🚀 FIX 1: ALTERNATING LOGIC (Odd = Check-in, Even = Leave) ---
+    df_all['flow_type'] = df_all['tap_rank'].apply(lambda x: "Check-in" if x % 2 != 0 else "Leave")
 
 # ==========================================================
 # 3. SIDEBAR: REMOTE HARDWARE COMMAND CENTER
