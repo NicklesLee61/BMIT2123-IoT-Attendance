@@ -179,7 +179,22 @@ if current_hw_mode == "Enrollment":
                     "student_id": sid, "name": info.get('name', 'N/A'), "course": info.get('course', 'N/A'),
                     "RFID_UID": card_info.get('card_id', 'Unlinked'), "FP_ID": card_info.get('fingerprint_id', 'N/A')
                 })
-            st.dataframe(pd.DataFrame(master_registry).sort_values("student_id"), use_container_width=True)
+            
+            reg_df = pd.DataFrame(master_registry).sort_values("student_id")
+            
+            # 🚀 UPGRADED: Targeted Search Bar for Master Registry
+            search_query = st.text_input("🔍 Search Student (by ID, Name, or Course):", placeholder="e.g. 2413458, Sakiko, Music...")
+            
+            if search_query:
+                # 只在 student_id, name, 和 course 这三列中进行精准搜索，忽略硬件 ID
+                search_cols = ['student_id', 'name', 'course']
+                mask = reg_df[search_cols].apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)
+                reg_df = reg_df[mask]
+                
+            reg_df = reg_df.reset_index(drop=True)
+            reg_df.index = reg_df.index + 1
+            
+            st.dataframe(reg_df, use_container_width=True)
 
             st.markdown("---")
             st.subheader("⚠️ Danger Zone: Remove Student")
@@ -277,7 +292,6 @@ else:
                     m_date = st.date_input("Date:", datetime.now())
                     m_time = st.time_input("Time:", dt_time(9, 0))
                     
-                    # 🚀 UPGRADED: Added format_func to display emoji without altering saved DB data
                     m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
                     
                     if st.form_submit_button("Force Sync Record"):
@@ -294,14 +308,12 @@ else:
         with c_mod:
             st.subheader("📝 Modify or Delete Entries")
             if not df_all.empty:
-                # 🚀 UPGRADED: The dropdown list of logs now features colored emojis for ultra-fast scanning
                 log_display_labels = df_all['formatted_time'] + " | " + df_all['name'] + " (" + df_all['status'].apply(display_status_emoji) + ")"
                 to_manage_display = st.selectbox("Select Entry:", log_display_labels.tolist())
                 
                 row = df_all[log_display_labels == to_manage_display].iloc[0]
                 
                 with st.expander("Update Status"):
-                    # 🚀 UPGRADED: Added format_func to this dropdown as well
                     new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
                     if st.button("Update Entry"):
                         db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
