@@ -233,9 +233,27 @@ else:
             fig_pie, ax_pie = plt.subplots()
             ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c'])
             st.pyplot(fig_pie)
+            
+            # --- NEW ADDITION: 4.3 DAILY ATTENDANCE TREND LINE CHART ---
+            st.markdown("---")
+            st.subheader("📈 Daily Attendance Trend")
+            # Smart logic: Count unique students per day to avoid double counting (Check-in/Leave)
+            present_df = df_all[df_all['status'] == 'present'].drop_duplicates(subset=['record_date', 'student_id'])
+            if not present_df.empty:
+                daily_trend = present_df.groupby('record_date').size().reset_index(name='Total_Present')
+                daily_trend = daily_trend.sort_values('record_date')
+                
+                fig_line, ax_line = plt.subplots(figsize=(10, 4))
+                sns.lineplot(data=daily_trend, x='record_date', y='Total_Present', marker='o', color='#2980b9', ax=ax_line)
+                ax_line.set_xlabel("Date")
+                ax_line.set_ylabel("Total Students Present")
+                plt.xticks(rotation=45)
+                st.pyplot(fig_line)
+            else:
+                st.info("Not enough data to plot the daily trend.")
 
             st.markdown("---")
-            # 4.3 PERMANENT RECORD BRIDGE (Excel archival)
+            # 4.4 PERMANENT RECORD BRIDGE (Excel archival)
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df_all[['formatted_time', 'name', 'student_id', 'status', 'verification_method']].to_excel(writer, index=False)
