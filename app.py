@@ -192,7 +192,8 @@ else:
                 m_sid = st.selectbox("Target Profile:", sorted(students_data.keys()))
                 m_date = st.date_input("Date:", datetime.now())
                 m_time = st.time_input("Time:", dt_time(9, 0))
-                m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)"])
+                # 🚀 新增 "leave" 选项
+                m_status = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
                 if st.form_submit_button("Force Sync Record"):
                     dt_combined = datetime.combine(m_date, m_time)
                     unix_ts = int(dt_combined.timestamp())
@@ -211,7 +212,8 @@ else:
                 row = df_all[log_labels == to_manage].iloc[0]
                 
                 with st.expander("Update Status"):
-                    new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)"])
+                    # 🚀 同步新增 "leave" 选项
+                    new_stat = st.selectbox("Change to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"])
                     if st.button("Update This Specific Entry"):
                         db.reference(f'/attendance/{row["firebase_path"]}').update({'status': new_stat, 'verification_method': "Admin_Manual_Update"})
                         st.success("Record updated!"); st.rerun()
@@ -246,7 +248,7 @@ else:
             st.subheader("Lecture Status Distribution")
             status_counts = df_all['status'].value_counts()
             fig_pie, ax_pie = plt.subplots()
-            ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c'])
+            ax_pie.pie(status_counts, labels=status_counts.index, autopct='%1.1f%%', colors=['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'])
             st.pyplot(fig_pie)
             
             # --- NEW ADDITION: 4.3 DAILY ATTENDANCE TREND (STATUS COMPARISON) ---
@@ -262,7 +264,7 @@ else:
                 daily_trend = daily_trend.sort_values('record_date')
                 
                 fig_line, ax_line = plt.subplots(figsize=(10, 4))
-                # Key change: Add hue='status' to plot different lines for present, absent, late
+                # Key change: Add hue='status' to plot different lines for present, absent, late, leave
                 sns.lineplot(data=daily_trend, x='record_date', y='Student_Count', hue='status', 
                              marker='o', palette='Set2', ax=ax_line)
                 
