@@ -303,6 +303,7 @@ else:
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
+            # 🎨 Theme Settings for Plotly
             color_map = {
                 'present': '#2ecc71',
                 'absent': '#e74c3c',
@@ -315,15 +316,11 @@ else:
             
             with sub_tab1:
                 st.markdown("##### 📌 High-Level KPIs")
-                a_col1, a_col2, a_col3, a_col4 = st.columns(4)
-                total_records = len(df_all)
-                present_total = len(df_all[df_all['status'] == 'present'])
-                overall_rate = round((present_total / total_records) * 100, 1) if total_records > 0 else 0
+                # 🚀 CHANGED: Now only 2 columns instead of 4
+                a_col1, a_col2 = st.columns(2)
                 
-                a_col1.metric("Total Tap Records", total_records)
-                a_col2.metric("Overall Present Rate", f"{overall_rate}%")
-                a_col3.metric("Active Students Tracked", df_all['student_id'].nunique())
-                a_col4.metric("Days Tracked", df_all['record_date'].nunique())
+                a_col1.metric("Active Students Tracked", df_all['student_id'].nunique())
+                a_col2.metric("Days Tracked", df_all['record_date'].nunique())
                 st.write("---")
                 
                 with st.container(border=True):
@@ -364,13 +361,11 @@ else:
                     else: 
                         st.info("💡 Insufficient data for today's duration analysis (Requires both Check-in and Check-out logs).")
 
-            # --- SUB-PAGE 3: UPDATED EXPORT CENTER ---
             with sub_tab3:
                 with st.container(border=True):
                     st.subheader("📥 Data Export Center")
                     st.write("Filter, review the raw dataset, and generate the official Excel report.")
                     
-                    # 🚀 New feature: Date Filter Option
                     export_filter = st.radio("Select Export Range:", ["All Time (Full History)", "Specific Date"], horizontal=True)
                     
                     if export_filter == "Specific Date":
@@ -382,16 +377,13 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        # Preview filtered Dataframe
                         st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
                         
-                        # Generate Excel Buffer
                         buf = io.BytesIO()
                         with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
                             export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
                         
-                        # Dynamic File Name
                         file_suffix = "All_Time" if export_filter == "All Time (Full History)" else export_date.strftime("%Y%m%d")
                         file_name = f"Smart_Campus_Report_{file_suffix}.xlsx"
                         
