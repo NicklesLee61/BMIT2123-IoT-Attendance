@@ -91,7 +91,6 @@ if not df_all.empty:
             
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
     
-    # 🚀 NEW: Map the student's Faculty into the Attendance DataFrame for analytics
     course_map = {k: v.get('course', 'Unknown / Other') for k, v in students_data.items()}
     df_all['course'] = df_all['student_id'].map(course_map).fillna('Unknown / Other')
 
@@ -166,7 +165,6 @@ if current_hw_mode == "Enrollment":
             with c1:
                 n_id = st.text_input("Student ID (Required):").strip()
                 n_name = st.text_input("Full Name:").strip()
-                # 🚀 CHANGED: Text Input to Selectbox
                 n_course = st.selectbox("Academic Faculty / Program:", FACULTIES)
             with c2:
                 n_rfid = st.text_input(f"RFID UID ({r_status}):", value=scanned_rfid).strip()
@@ -244,7 +242,6 @@ if current_hw_mode == "Enrollment":
                     with c1:
                         u_name = st.text_input("Full Name:", value=exist_stu.get('name', '')).strip()
                         
-                        # 🚀 CHANGED: Auto-match existing course in selectbox
                         exist_course = exist_stu.get('course', 'Unknown / Other')
                         c_index = FACULTIES.index(exist_course) if exist_course in FACULTIES else len(FACULTIES)-1
                         u_course = st.selectbox("Academic Faculty / Program:", FACULTIES, index=c_index)
@@ -456,29 +453,26 @@ else:
 
                 st.write("<br>", unsafe_allow_html=True)
                 
-                # 🚀 NEW: Faculty Attendance Rate Visualization
+                # 🚀 SMART CLEANSING: Map messy historical courses to clean acronyms for charting
                 with st.container(border=True):
                     st.subheader("🏛️ Faculty Attendance Rates")
                     st.caption("Overall 'Present' rate broken down by Academic Program")
                     
-                    # Calculate Present Rate per Course
-                    fac_rate = df_all.groupby('course').apply(
+                    df_all['Clean_Faculty'] = df_all['course'].apply(lambda x: str(x).split(':')[0].strip().upper())
+                    
+                    fac_rate = df_all.groupby('Clean_Faculty').apply(
                         lambda x: pd.Series({
                             'Total': len(x),
                             'Present': (x['status'] == 'present').sum()
                         })
                     ).reset_index()
                     
-                    # Prevent division by zero
                     fac_rate['Rate (%)'] = fac_rate.apply(lambda row: round((row['Present'] / row['Total']) * 100, 1) if row['Total'] > 0 else 0, axis=1)
                     
-                    # Truncate long names for better charting
-                    fac_rate['Short Faculty'] = fac_rate['course'].apply(lambda x: x.split(':')[0] if ':' in x else x)
-                    
-                    fig_fac = px.bar(fac_rate, x='Short Faculty', y='Rate (%)', text='Rate (%)', 
-                                     color='Short Faculty', 
-                                     hover_data={'course': True, 'Total': True, 'Present': True, 'Short Faculty': False},
-                                     labels={'Short Faculty': 'Faculty', 'Rate (%)': 'Attendance Rate (%)'})
+                    fig_fac = px.bar(fac_rate, x='Clean_Faculty', y='Rate (%)', text='Rate (%)', 
+                                     color='Clean_Faculty', 
+                                     hover_data={'Total': True, 'Present': True, 'Clean_Faculty': False},
+                                     labels={'Clean_Faculty': 'Faculty', 'Rate (%)': 'Attendance Rate (%)'})
                     fig_fac.update_traces(textposition='outside')
                     fig_fac.update_layout(showlegend=False, xaxis_title="", yaxis_range=[0, 110], margin=dict(t=30, b=0))
                     st.plotly_chart(fig_fac, use_container_width=True)
