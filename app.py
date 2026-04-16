@@ -116,8 +116,25 @@ if current_hw_mode == "Enrollment":
     tab_reg, tab_list = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry"])
     
     with tab_reg:
-        st.subheader("Student Registry & Smart Re-binding")
-        st.info("💡 To **re-bind a lost card**, enter the existing Student ID and fill in the new RFID UID. Leave other fields blank to keep existing data.")
+        st.subheader("Student Registry & Smart Auto-Fill")
+        
+        # 🚀 NEW: Auto-fill logic from pending_registration
+        pending_reg = db.reference('/pending_registration').get()
+        auto_rfid = ""
+        auto_fpid = ""
+        
+        col_btn1, col_btn2 = st.columns([1, 3])
+        with col_btn1:
+            if st.button("🔄 Fetch Scanned Card", type="primary"):
+                st.rerun()
+                
+        if pending_reg:
+            auto_rfid = str(pending_reg.get('rfid', ''))
+            auto_fpid = str(pending_reg.get('fp_id', ''))
+            st.success(f"🔔 Hardware Scan Detected! RFID and Fingerprint ID have been auto-filled below.")
+        else:
+            st.info("💡 Scan a card and fingerprint on the hardware, then click 'Fetch Scanned Card' to auto-fill.")
+
         with st.form("enroll_form"):
             c1, c2 = st.columns(2)
             with c1:
@@ -125,8 +142,9 @@ if current_hw_mode == "Enrollment":
                 n_name = st.text_input("Full Name:").strip()
                 n_course = st.text_input("Academic Program:").strip()
             with c2:
-                n_rfid = st.text_input("New RFID UID:").strip()
-                n_fpid = st.text_input("Fingerprint Token (Slot ID):").strip()
+                # 🚀 The values here will automatically populate if pending_reg exists!
+                n_rfid = st.text_input("RFID UID:", value=auto_rfid).strip()
+                n_fpid = st.text_input("Fingerprint Token (Slot ID):", value=auto_fpid).strip()
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
             if st.form_submit_button("Finalize Registration / Update"):
@@ -134,6 +152,7 @@ if current_hw_mode == "Enrollment":
                     rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
                     fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
                     has_conflict = False
+                    
                     if n_rfid and n_rfid in rfid_owners and rfid_owners[n_rfid] != n_id:
                         st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by Student ID: {rfid_owners[n_rfid]}"); has_conflict = True
                     if n_fpid and n_fpid in fpid_owners and fpid_owners[n_fpid] != n_id:
@@ -161,8 +180,17 @@ if current_hw_mode == "Enrollment":
                         }
                         if exist_card_key: db.reference(f'/cards/{exist_card_key}').update(card_payload)
                         else: db.reference('/cards').push().set(card_payload)
+                        
+                        # 🚀 Clear the pending registration after successful enrollment
+                        db.reference('/pending_registration').delete()
                         st.success(f"Profile {n_id} successfully updated!"); st.rerun()
                 else: st.error("⚠️ Student ID is required.")
+
+        # Allow admin to manually clear the pending scan if they made a mistake
+        if pending_reg:
+            if st.button("🗑️ Clear Hardware Scan Data"):
+                db.reference('/pending_registration').delete()
+                st.rerun()
 
     with tab_list:
         if students_data:
@@ -303,7 +331,6 @@ else:
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
-            # 🎨 Theme Settings for Plotly
             color_map = {
                 'present': '#2ecc71',
                 'absent': '#e74c3c',
@@ -316,9 +343,7 @@ else:
             
             with sub_tab1:
                 st.markdown("##### 📌 High-Level KPIs")
-                # 🚀 CHANGED: Now only 2 columns instead of 4
                 a_col1, a_col2 = st.columns(2)
-                
                 a_col1.metric("Active Students Tracked", df_all['student_id'].nunique())
                 a_col2.metric("Days Tracked", df_all['record_date'].nunique())
                 st.write("---")
