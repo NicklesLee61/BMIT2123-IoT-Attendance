@@ -557,3 +557,4 @@ else:
                         
         else: 
             st.warning("⚠️ No analytics available yet. Synchronize hardware logs first.")
+
