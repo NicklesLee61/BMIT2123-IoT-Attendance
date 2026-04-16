@@ -296,7 +296,7 @@ else:
                 else: st.info("No attendance records in database.")
 
     # ==========================================================
-    # 📊 tab_m3: ADVANCED ANALYTICS INTERFACE
+    # 📊 tab_m3: REDESIGNED MULTI-PAGE ANALYTICS (Sub-tabs applied here)
     # ==========================================================
     with tab_m3:
         st.header("📊 Advanced Analytics Dashboard")
@@ -312,39 +312,25 @@ else:
                 'leave': '#3498db'
             }
 
-            # 🚀 1. TREND CHART (NATIVE BAR CHART)
-            with st.container(border=True):
-                st.subheader("📈 Daily Attendance Trend")
-                unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
-                if not unique_daily.empty:
-                    daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
-                    chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
-                    st.bar_chart(chart_data, use_container_width=True)
-                    
-            # 🚀 2. COLUMNS (DURATION & COMPOSITION)
-            cola, colb = st.columns(2, gap="large")
+            # 🚀 Create 3 Nested Sub-tabs to prevent vertical scrolling!
+            sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
             
-            with cola:
-                with st.container(border=True):
-                    st.subheader("⏱️ Stay Duration Analysis")
-                    st.caption("Active hours spent in today's session")
-                    dur_data = []
-                    today_s = datetime.now().strftime("%Y-%m-%d")
-                    valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
-                    
-                    for sid in students_data.keys():
-                        p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_s)].sort_values('dt_obj')
-                        if len(p_t) >= 2: 
-                            hrs = round((p_t.iloc[-1]['dt_obj'] - p_t.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
-                            dur_data.append({"ID": sid, "Hrs": hrs}) 
-                            
-                    if dur_data: 
-                        dur_df = pd.DataFrame(dur_data)
-                        st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
-                    else: 
-                        st.info("💡 Check-in and Check-out logs needed for today to calculate duration.")
-                        
-            with colb:
+            # --- SUB-PAGE 1: OVERVIEW & COMPOSITION ---
+            with sub_tab1:
+                st.markdown("##### 📌 High-Level KPIs")
+                a_col1, a_col2, a_col3, a_col4 = st.columns(4)
+                
+                total_records = len(df_all)
+                present_total = len(df_all[df_all['status'] == 'present'])
+                overall_rate = round((present_total / total_records) * 100, 1) if total_records > 0 else 0
+                
+                a_col1.metric("Total Tap Records", total_records)
+                a_col2.metric("Overall Present Rate", f"{overall_rate}%")
+                a_col3.metric("Active Students Tracked", df_all['student_id'].nunique())
+                a_col4.metric("Days Tracked", df_all['record_date'].nunique())
+                
+                st.write("---")
+                
                 with st.container(border=True):
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
@@ -359,19 +345,60 @@ else:
                     )
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                     fig_pie.update_layout(
-                        showlegend=False,
+                        showlegend=True,
                         margin=dict(l=0, r=0, t=20, b=0),
                         paper_bgcolor="rgba(0,0,0,0)"
                     )
                     st.plotly_chart(fig_pie, use_container_width=True)
+
+            # --- SUB-PAGE 2: TRENDS & DURATION ---
+            with sub_tab2:
+                with st.container(border=True):
+                    st.subheader("📈 Daily Attendance Trend")
+                    st.caption("Tracking daily attendance variations over time")
+                    unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
+                    if not unique_daily.empty:
+                        daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
+                        chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
+                        st.bar_chart(chart_data, use_container_width=True)
+                
+                st.write("<br>", unsafe_allow_html=True)
+                
+                with st.container(border=True):
+                    st.subheader("⏱️ Stay Duration Analysis")
+                    st.caption("Active hours spent in today's session (Check-in to Check-out)")
+                    dur_data = []
+                    today_s = datetime.now().strftime("%Y-%m-%d")
+                    valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
                     
-            # 🚀 3. EXPORT
-            with st.container(border=True):
-                st.subheader("📥 Data Export Center")
-                st.write("Generate and download the official lecture attendance report.")
-                buf = io.BytesIO()
-                with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
-                    df_all[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
-                st.download_button("📂 Download Full Attendance Report (.xlsx)", data=buf.getvalue(), file_name=f"Smart_Campus_Report_{datetime.now().strftime('%Y%m%d')}.xlsx", use_container_width=True)
+                    for sid in students_data.keys():
+                        p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_s)].sort_values('dt_obj')
+                        if len(p_t) >= 2: 
+                            hrs = round((p_t.iloc[-1]['dt_obj'] - p_t.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
+                            dur_data.append({"ID": sid, "Hrs": hrs}) 
+                            
+                    if dur_data: 
+                        dur_df = pd.DataFrame(dur_data)
+                        st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
+                    else: 
+                        st.info("💡 Insufficient data for today's duration analysis (Requires both Check-in and Check-out logs).")
+
+            # --- SUB-PAGE 3: EXPORT CENTER ---
+            with sub_tab3:
+                with st.container(border=True):
+                    st.subheader("📥 Data Export Center")
+                    st.write("Review the raw dataset and generate the official Excel report.")
+                    
+                    # Preview Dataframe
+                    st.dataframe(df_all[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
+                    
+                    st.write("<br>", unsafe_allow_html=True)
+                    
+                    buf = io.BytesIO()
+                    with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
+                        df_all[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
+                    
+                    st.download_button("📂 Download Official Attendance Report (.xlsx)", data=buf.getvalue(), file_name=f"Smart_Campus_Report_{datetime.now().strftime('%Y%m%d')}.xlsx", use_container_width=True, type="primary")
+                    
         else: 
             st.warning("⚠️ No analytics available yet. Synchronize hardware logs first.")
