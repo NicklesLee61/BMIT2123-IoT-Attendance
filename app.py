@@ -290,7 +290,6 @@ if current_hw_mode == "Enrollment":
             master_registry = []
             for sid, info in students_data.items():
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
-                # 🚀 CHANGED: Auto-truncate the course name to acronym for the table display
                 raw_course = str(info.get('course', 'N/A'))
                 short_course = raw_course.split(':')[0].strip() if ':' in raw_course else raw_course
                 
@@ -462,8 +461,8 @@ else:
                     fig_pie.update_layout(showlegend=True, margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig_pie, use_container_width=True)
 
-                st.write("<br>", unsafe_allow_html=True)
-                
+            with sub_tab2:
+                # 🚀 MOVED: Daily Faculty Analytics is now the first deep-dive chart here
                 with st.container(border=True):
                     st.subheader("🏛️ Daily Faculty Attendance Rates")
                     
@@ -507,7 +506,8 @@ else:
                     else:
                         st.info("No students registered yet.")
 
-            with sub_tab2:
+                st.write("<br>", unsafe_allow_html=True)
+
                 with st.container(border=True):
                     st.subheader("📈 Daily Attendance Trend")
                     st.caption("Tracking daily attendance variations over time")
@@ -551,7 +551,6 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        # 🚀 CHANGED: Clean the course format here for the Export Table as well
                         export_df['course'] = export_df['course'].apply(lambda x: str(x).split(':')[0].strip() if ':' in str(x) else str(x))
                         
                         st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
