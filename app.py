@@ -296,14 +296,13 @@ else:
                 else: st.info("No attendance records in database.")
 
     # ==========================================================
-    # 📊 tab_m3: REDESIGNED MULTI-PAGE ANALYTICS (Sub-tabs applied here)
+    # 📊 tab_m3: REDESIGNED MULTI-PAGE ANALYTICS 
     # ==========================================================
     with tab_m3:
         st.header("📊 Advanced Analytics Dashboard")
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
-            # 🎨 Theme Settings for Plotly
             color_map = {
                 'present': '#2ecc71',
                 'absent': '#e74c3c',
@@ -312,14 +311,11 @@ else:
                 'leave': '#3498db'
             }
 
-            # 🚀 Create 3 Nested Sub-tabs to prevent vertical scrolling!
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
             
-            # --- SUB-PAGE 1: OVERVIEW & COMPOSITION ---
             with sub_tab1:
                 st.markdown("##### 📌 High-Level KPIs")
                 a_col1, a_col2, a_col3, a_col4 = st.columns(4)
-                
                 total_records = len(df_all)
                 present_total = len(df_all[df_all['status'] == 'present'])
                 overall_rate = round((present_total / total_records) * 100, 1) if total_records > 0 else 0
@@ -328,30 +324,18 @@ else:
                 a_col2.metric("Overall Present Rate", f"{overall_rate}%")
                 a_col3.metric("Active Students Tracked", df_all['student_id'].nunique())
                 a_col4.metric("Days Tracked", df_all['record_date'].nunique())
-                
                 st.write("---")
                 
                 with st.container(border=True):
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
-                    
                     s_c = df_all['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
-                    
-                    fig_pie = px.pie(
-                        s_c, values="Count", names="Status",
-                        hole=0.45, 
-                        color="Status", color_discrete_map=color_map
-                    )
+                    fig_pie = px.pie(s_c, values="Count", names="Status", hole=0.45, color="Status", color_discrete_map=color_map)
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-                    fig_pie.update_layout(
-                        showlegend=True,
-                        margin=dict(l=0, r=0, t=20, b=0),
-                        paper_bgcolor="rgba(0,0,0,0)"
-                    )
+                    fig_pie.update_layout(showlegend=True, margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig_pie, use_container_width=True)
 
-            # --- SUB-PAGE 2: TRENDS & DURATION ---
             with sub_tab2:
                 with st.container(border=True):
                     st.subheader("📈 Daily Attendance Trend")
@@ -361,7 +345,6 @@ else:
                         daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
                         chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
                         st.bar_chart(chart_data, use_container_width=True)
-                
                 st.write("<br>", unsafe_allow_html=True)
                 
                 with st.container(border=True):
@@ -370,35 +353,51 @@ else:
                     dur_data = []
                     today_s = datetime.now().strftime("%Y-%m-%d")
                     valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
-                    
                     for sid in students_data.keys():
                         p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_s)].sort_values('dt_obj')
                         if len(p_t) >= 2: 
                             hrs = round((p_t.iloc[-1]['dt_obj'] - p_t.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
                             dur_data.append({"ID": sid, "Hrs": hrs}) 
-                            
                     if dur_data: 
                         dur_df = pd.DataFrame(dur_data)
                         st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
                     else: 
                         st.info("💡 Insufficient data for today's duration analysis (Requires both Check-in and Check-out logs).")
 
-            # --- SUB-PAGE 3: EXPORT CENTER ---
+            # --- SUB-PAGE 3: UPDATED EXPORT CENTER ---
             with sub_tab3:
                 with st.container(border=True):
                     st.subheader("📥 Data Export Center")
-                    st.write("Review the raw dataset and generate the official Excel report.")
+                    st.write("Filter, review the raw dataset, and generate the official Excel report.")
                     
-                    # Preview Dataframe
-                    st.dataframe(df_all[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
+                    # 🚀 New feature: Date Filter Option
+                    export_filter = st.radio("Select Export Range:", ["All Time (Full History)", "Specific Date"], horizontal=True)
                     
-                    st.write("<br>", unsafe_allow_html=True)
+                    if export_filter == "Specific Date":
+                        export_date = st.date_input("Select Date to Export:", datetime.now(), key="export_date_input")
+                        export_df = df_all[df_all['record_date'] == export_date.strftime("%Y-%m-%d")]
+                    else:
+                        export_df = df_all.copy()
                     
-                    buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
-                        df_all[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
+                    st.write("---")
                     
-                    st.download_button("📂 Download Official Attendance Report (.xlsx)", data=buf.getvalue(), file_name=f"Smart_Campus_Report_{datetime.now().strftime('%Y%m%d')}.xlsx", use_container_width=True, type="primary")
-                    
+                    if not export_df.empty:
+                        # Preview filtered Dataframe
+                        st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
+                        st.write("<br>", unsafe_allow_html=True)
+                        
+                        # Generate Excel Buffer
+                        buf = io.BytesIO()
+                        with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
+                            export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
+                        
+                        # Dynamic File Name
+                        file_suffix = "All_Time" if export_filter == "All Time (Full History)" else export_date.strftime("%Y%m%d")
+                        file_name = f"Smart_Campus_Report_{file_suffix}.xlsx"
+                        
+                        st.download_button("📂 Download Official Attendance Report (.xlsx)", data=buf.getvalue(), file_name=file_name, use_container_width=True, type="primary")
+                    else:
+                        st.info("⚠️ No records found for the selected filter.")
+                        
         else: 
             st.warning("⚠️ No analytics available yet. Synchronize hardware logs first.")
