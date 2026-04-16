@@ -462,7 +462,6 @@ else:
                     st.plotly_chart(fig_pie, use_container_width=True)
 
             with sub_tab2:
-                # 🚀 MOVED: Daily Faculty Analytics is now the first deep-dive chart here
                 with st.container(border=True):
                     st.subheader("🏛️ Daily Faculty Attendance Rates")
                     
@@ -518,22 +517,35 @@ else:
                         st.bar_chart(chart_data, use_container_width=True)
                 st.write("<br>", unsafe_allow_html=True)
                 
+                # 🚀 CHANGED: Added Date and Specific Student Filters for Duration Analysis
                 with st.container(border=True):
                     st.subheader("⏱️ Stay Duration Analysis")
-                    st.caption("Active hours spent in today's session (Check-in to Check-out)")
+                    
+                    dc1, dc2 = st.columns(2)
+                    with dc1:
+                        dur_date = st.date_input("Select Date for Duration:", datetime.now(), key="dur_date_picker")
+                    with dc2:
+                        dur_stu = st.selectbox("Filter by Specific Student:", ["-- All Students --"] + sorted(profile_mapping.keys()), key="dur_stu_picker")
+                        
+                    dur_date_str = dur_date.strftime("%Y-%m-%d")
+                    st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
+                    
                     dur_data = []
-                    today_s = datetime.now().strftime("%Y-%m-%d")
                     valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
-                    for sid in students_data.keys():
-                        p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_s)].sort_values('dt_obj')
+                    
+                    target_sids = students_data.keys() if dur_stu == "-- All Students --" else [profile_mapping[dur_stu]]
+                    
+                    for sid in target_sids:
+                        p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == dur_date_str)].sort_values('dt_obj')
                         if len(p_t) >= 2: 
                             hrs = round((p_t.iloc[-1]['dt_obj'] - p_t.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
                             dur_data.append({"ID": sid, "Hrs": hrs}) 
+                            
                     if dur_data: 
                         dur_df = pd.DataFrame(dur_data)
                         st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
                     else: 
-                        st.info("💡 Insufficient data for today's duration analysis (Requires both Check-in and Check-out logs).")
+                        st.info(f"💡 Insufficient data for {dur_date_str} (Requires both Check-in and Check-out logs).")
 
             with sub_tab3:
                 with st.container(border=True):
