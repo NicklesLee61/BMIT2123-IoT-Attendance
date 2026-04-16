@@ -8,7 +8,7 @@ import time
 import io
 
 # ==========================================================
-# 🚀 GLOBAL FACULTY LIST (From User Image)
+# 🚀 GLOBAL FACULTY LIST
 # ==========================================================
 FACULTIES = [
     "FAFB: Faculty of Accountancy, Finance and Business",
@@ -453,29 +453,49 @@ else:
 
                 st.write("<br>", unsafe_allow_html=True)
                 
-                # 🚀 SMART CLEANSING: Map messy historical courses to clean acronyms for charting
+                # 🚀 SMART CLEANSING & DAILY FACULTY CALCULATION
                 with st.container(border=True):
-                    st.subheader("🏛️ Faculty Attendance Rates")
-                    st.caption("Overall 'Present' rate broken down by Academic Program")
+                    st.subheader("🏛️ Daily Faculty Attendance Rates")
                     
-                    df_all['Clean_Faculty'] = df_all['course'].apply(lambda x: str(x).split(':')[0].strip().upper())
+                    fac_date = st.date_input("Select Date for Faculty Analytics:", datetime.now(), key="fac_date_picker")
+                    selected_date_str = fac_date.strftime("%Y-%m-%d")
+                    st.caption(f"Attendance rate based on total enrolled students per faculty for {selected_date_str}")
                     
-                    fac_rate = df_all.groupby('Clean_Faculty').apply(
-                        lambda x: pd.Series({
-                            'Total': len(x),
-                            'Present': (x['status'] == 'present').sum()
-                        })
-                    ).reset_index()
+                    stu_list = []
+                    for sid_reg, info_reg in students_data.items():
+                        raw_c = info_reg.get('course', 'Unknown / Other')
+                        clean_c = str(raw_c).split(':')[0].strip().upper()
+                        stu_list.append({'student_id': sid_reg, 'Clean_Faculty': clean_c})
                     
-                    fac_rate['Rate (%)'] = fac_rate.apply(lambda row: round((row['Present'] / row['Total']) * 100, 1) if row['Total'] > 0 else 0, axis=1)
+                    df_stu = pd.DataFrame(stu_list)
                     
-                    fig_fac = px.bar(fac_rate, x='Clean_Faculty', y='Rate (%)', text='Rate (%)', 
-                                     color='Clean_Faculty', 
-                                     hover_data={'Total': True, 'Present': True, 'Clean_Faculty': False},
-                                     labels={'Clean_Faculty': 'Faculty', 'Rate (%)': 'Attendance Rate (%)'})
-                    fig_fac.update_traces(textposition='outside')
-                    fig_fac.update_layout(showlegend=False, xaxis_title="", yaxis_range=[0, 110], margin=dict(t=30, b=0))
-                    st.plotly_chart(fig_fac, use_container_width=True)
+                    if not df_stu.empty:
+                        fac_totals = df_stu.groupby('Clean_Faculty').size().reset_index(name='Total_Enrolled')
+                        
+                        day_records = df_all[df_all['record_date'] == selected_date_str]
+                        
+                        if not day_records.empty:
+                            day_records = day_records.copy()
+                            day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split(':')[0].strip().upper())
+                            day_unique = day_records.drop_duplicates(subset=['student_id'], keep='last')
+                            
+                            day_present = day_unique[day_unique['status'].astype(str).str.lower().isin(['present', 'late'])]
+                            fac_present = day_present.groupby('Clean_Faculty').size().reset_index(name='Attended')
+                        else:
+                            fac_present = pd.DataFrame(columns=['Clean_Faculty', 'Attended'])
+                        
+                        fac_rate = pd.merge(fac_totals, fac_present, on='Clean_Faculty', how='left').fillna(0)
+                        fac_rate['Rate (%)'] = fac_rate.apply(lambda row: round((row['Attended'] / row['Total_Enrolled']) * 100, 1) if row['Total_Enrolled'] > 0 else 0, axis=1)
+                        
+                        fig_fac = px.bar(fac_rate, x='Clean_Faculty', y='Rate (%)', text='Rate (%)', 
+                                         color='Clean_Faculty', 
+                                         hover_data={'Total_Enrolled': True, 'Attended': True, 'Clean_Faculty': False},
+                                         labels={'Clean_Faculty': 'Faculty', 'Rate (%)': 'Attendance Rate (%)', 'Total_Enrolled': 'Registered Students', 'Attended': 'Attended Today'})
+                        fig_fac.update_traces(textposition='outside')
+                        fig_fac.update_layout(showlegend=False, xaxis_title="", yaxis_range=[0, 110], margin=dict(t=30, b=0))
+                        st.plotly_chart(fig_fac, use_container_width=True)
+                    else:
+                        st.info("No students registered yet.")
 
             with sub_tab2:
                 with st.container(border=True):
