@@ -78,7 +78,7 @@ if not df_all.empty:
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
 
 # ==========================================================
-# 🚀 GLOBAL UI HELPER: Emoji Formatters
+# GLOBAL UI HELPER: Emoji Formatters
 # ==========================================================
 def display_status_emoji(s):
     s_lower = str(s).lower()
@@ -118,7 +118,7 @@ if current_hw_mode == "Enrollment":
     with tab_reg:
         st.subheader("Student Registry & Smart Auto-Fill")
         
-        # 🚀 NEW: Auto-fill logic from pending_registration
+        # Auto-fill logic from pending_registration
         pending_reg = db.reference('/pending_registration').get()
         auto_rfid = ""
         auto_fpid = ""
@@ -142,7 +142,7 @@ if current_hw_mode == "Enrollment":
                 n_name = st.text_input("Full Name:").strip()
                 n_course = st.text_input("Academic Program:").strip()
             with c2:
-                # 🚀 The values here will automatically populate if pending_reg exists!
+                # The values here will automatically populate if pending_reg exists!
                 n_rfid = st.text_input("RFID UID:", value=auto_rfid).strip()
                 n_fpid = st.text_input("Fingerprint Token (Slot ID):", value=auto_fpid).strip()
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -181,7 +181,7 @@ if current_hw_mode == "Enrollment":
                         if exist_card_key: db.reference(f'/cards/{exist_card_key}').update(card_payload)
                         else: db.reference('/cards').push().set(card_payload)
                         
-                        # 🚀 Clear the pending registration after successful enrollment
+                        # Clear the pending registration after successful enrollment
                         db.reference('/pending_registration').delete()
                         st.success(f"Profile {n_id} successfully updated!"); st.rerun()
                 else: st.error("⚠️ Student ID is required.")
