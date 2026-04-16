@@ -290,7 +290,18 @@ if current_hw_mode == "Enrollment":
             master_registry = []
             for sid, info in students_data.items():
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
-                master_registry.append({"student_id": sid, "name": info.get('name', 'N/A'), "course": info.get('course', 'N/A'), "RFID_UID": card_info.get('card_id', 'Unlinked'), "FP_ID": card_info.get('fingerprint_id', 'N/A')})
+                # 🚀 CHANGED: Auto-truncate the course name to acronym for the table display
+                raw_course = str(info.get('course', 'N/A'))
+                short_course = raw_course.split(':')[0].strip() if ':' in raw_course else raw_course
+                
+                master_registry.append({
+                    "student_id": sid, 
+                    "name": info.get('name', 'N/A'), 
+                    "course": short_course, 
+                    "RFID_UID": card_info.get('card_id', 'Unlinked'), 
+                    "FP_ID": card_info.get('fingerprint_id', 'N/A')
+                })
+                
             reg_df = pd.DataFrame(master_registry).sort_values("student_id")
             search_query = st.text_input("🔍 Search Student (by ID, Name, or Course):", placeholder="e.g. 2413458, Sakiko...")
             if search_query:
@@ -453,7 +464,6 @@ else:
 
                 st.write("<br>", unsafe_allow_html=True)
                 
-                # 🚀 SMART CLEANSING & DAILY FACULTY CALCULATION
                 with st.container(border=True):
                     st.subheader("🏛️ Daily Faculty Attendance Rates")
                     
@@ -541,6 +551,9 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
+                        # 🚀 CHANGED: Clean the course format here for the Export Table as well
+                        export_df['course'] = export_df['course'].apply(lambda x: str(x).split(':')[0].strip() if ':' in str(x) else str(x))
+                        
                         st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
                         
@@ -557,4 +570,3 @@ else:
                         
         else: 
             st.warning("⚠️ No analytics available yet. Synchronize hardware logs first.")
-
