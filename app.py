@@ -113,85 +113,165 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    tab_reg, tab_list = st.tabs(["➕ Student Registration / Re-bind", "🗃️ Master Registry"])
+    st.subheader("Student Enrollment & Management Hub")
     
+    # Global pending registration check
+    pending_reg = db.reference('/pending_registration').get()
+    scanned_rfid = str(pending_reg.get('rfid', '')) if pending_reg else ""
+    scanned_fpid = str(pending_reg.get('fp_id', '')) if pending_reg else ""
+
+    tab_reg, tab_update, tab_list = st.tabs(["➕ New Registration", "🔄 Update Student Details", "🗃️ Master Registry"])
+    
+    # ---------------------------------------------------------
+    # TAB 1: PURE NEW REGISTRATION
+    # ---------------------------------------------------------
     with tab_reg:
-        st.subheader("Student Registry & Smart Auto-Fill")
+        st.markdown("### 📝 Register New Student")
         
-        # 🚀 NEW: Auto-fill logic from pending_registration
-        pending_reg = db.reference('/pending_registration').get()
-        auto_rfid = ""
-        auto_fpid = ""
-        
-        col_btn1, col_btn2 = st.columns([1, 3])
+        # Independent Fetch Button for this page
+        col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
-            if st.button("🔄 Fetch Scanned Card", type="primary"):
+            if st.button("🔄 Fetch Scanned Card", key="fetch_new", type="primary"):
                 st.rerun()
                 
         if pending_reg:
-            auto_rfid = str(pending_reg.get('rfid', ''))
-            auto_fpid = str(pending_reg.get('fp_id', ''))
-            st.success(f"🔔 Hardware Scan Detected! RFID and Fingerprint ID have been auto-filled below.")
+            st.success(f"✅ Hardware scan captured! Ready to register.")
+            r_status = "🟢 Fetched from Scanner"
+            f_status = "🟢 Fetched from Scanner"
+            if st.button("🗑️ Clear Scan Data", key="clear_new"):
+                db.reference('/pending_registration').delete(); st.rerun()
         else:
-            st.info("💡 Scan a card and fingerprint on the hardware, then click 'Fetch Scanned Card' to auto-fill.")
+            st.info("💡 Scan a card on the hardware, then click 'Fetch Scanned Card' above.")
+            r_status = "⚪ Waiting for Scan"
+            f_status = "⚪ Waiting for Scan"
 
-        with st.form("enroll_form"):
+        with st.form("enroll_form_new"):
             c1, c2 = st.columns(2)
             with c1:
                 n_id = st.text_input("Student ID (Required):").strip()
                 n_name = st.text_input("Full Name:").strip()
                 n_course = st.text_input("Academic Program:").strip()
             with c2:
-                # 🚀 The values here will automatically populate if pending_reg exists!
-                n_rfid = st.text_input("RFID UID:", value=auto_rfid).strip()
-                n_fpid = st.text_input("Fingerprint Token (Slot ID):", value=auto_fpid).strip()
+                # Auto-fill using scanned data with status shown in label
+                n_rfid = st.text_input(f"RFID UID ({r_status}):", value=scanned_rfid).strip()
+                n_fpid = st.text_input(f"Fingerprint Token ({f_status}):", value=scanned_fpid).strip()
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-            if st.form_submit_button("Finalize Registration / Update"):
-                if n_id:
+            if st.form_submit_button("Finalize New Registration"):
+                if not n_id or not n_name:
+                    st.error("⚠️ Student ID and Name are required for new registration.")
+                elif n_id in students_data:
+                    st.error(f"❌ **ID Conflict:** Student ID `{n_id}` already exists. Use the 'Update Student Details' tab instead.")
+                else:
                     rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
                     fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
                     has_conflict = False
                     
-                    if n_rfid and n_rfid in rfid_owners and rfid_owners[n_rfid] != n_id:
-                        st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by Student ID: {rfid_owners[n_rfid]}"); has_conflict = True
-                    if n_fpid and n_fpid in fpid_owners and fpid_owners[n_fpid] != n_id:
-                        st.error(f"❌ **Hardware Conflict:** FP Token `{n_fpid}` is already in use by Student ID: {fpid_owners[n_fpid]}"); has_conflict = True
-                    if n_id in students_data and n_name:
-                        existing_name = students_data[n_id].get('name', '')
-                        if existing_name and n_name.lower() != existing_name.lower():
-                            st.error(f"❌ **ID Conflict:** Student ID `{n_id}` is already registered. If you meant to re-bind their card, leave 'Full Name' blank."); has_conflict = True
+                    if n_rfid and n_rfid in rfid_owners:
+                        st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by {rfid_owners[n_rfid]}."); has_conflict = True
+                    if n_fpid and n_fpid in fpid_owners:
+                        st.error(f"❌ **Hardware Conflict:** FP Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
 
                     if not has_conflict:
-                        exist_stu = students_data.get(n_id, {})
-                        exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == n_id), None)
-                        exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
-                        
                         db.reference(f'/students/{n_id}').update({
-                            "student_id": n_id, "name": n_name if n_name else exist_stu.get('name', 'Unknown'),
-                            "rfid": n_rfid if n_rfid else exist_card.get('card_id', 'Unlinked'), 
-                            "course": n_course if n_course else exist_stu.get('course', 'Unknown'), "registered_date": n_date
+                            "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
+                            "rfid": n_rfid if n_rfid else "Unlinked"
                         })
-                        card_payload = {
-                            "student_id": n_id, "name": n_name if n_name else exist_stu.get('name', 'Unknown'),
-                            "card_id": n_rfid if n_rfid else exist_card.get('card_id', 'Unlinked'), 
-                            "course": n_course if n_course else exist_stu.get('course', 'Unknown'),
-                            "fingerprint_id": n_fpid if n_fpid else exist_card.get('fingerprint_id', 'Unlinked'), "registered_date": n_date
-                        }
-                        if exist_card_key: db.reference(f'/cards/{exist_card_key}').update(card_payload)
-                        else: db.reference('/cards').push().set(card_payload)
-                        
-                        # 🚀 Clear the pending registration after successful enrollment
-                        db.reference('/pending_registration').delete()
-                        st.success(f"Profile {n_id} successfully updated!"); st.rerun()
-                else: st.error("⚠️ Student ID is required.")
+                        db.reference('/cards').push().set({
+                            "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
+                            "card_id": n_rfid if n_rfid else "Unlinked",
+                            "fingerprint_id": n_fpid if n_fpid else "Unlinked"
+                        })
+                        if pending_reg: db.reference('/pending_registration').delete()
+                        st.success(f"Profile {n_name} ({n_id}) successfully created!"); time.sleep(1); st.rerun()
 
-        # Allow admin to manually clear the pending scan if they made a mistake
-        if pending_reg:
-            if st.button("🗑️ Clear Hardware Scan Data"):
-                db.reference('/pending_registration').delete()
+    # ---------------------------------------------------------
+    # TAB 2: UPDATE / RE-BIND (PRESERVES UNMODIFIED DATA)
+    # ---------------------------------------------------------
+    with tab_update:
+        st.markdown("### 🔄 Update Student Details / Re-bind Card")
+        
+        # Independent Fetch Button for this page
+        ucol_btn1, ucol_btn2 = st.columns([1, 4])
+        with ucol_btn1:
+            if st.button("🔄 Fetch Scanned Card", key="fetch_update", type="primary"):
                 st.rerun()
 
+        if profile_mapping:
+            u_search = st.text_input("🔍 Search Student to Update (by ID or Name):", placeholder="e.g. 24WMR...")
+            u_opts = sorted([p for p in profile_mapping.keys() if u_search.lower() in p.lower()]) if u_search else sorted(profile_mapping.keys())
+            
+            if u_opts:
+                u_disp = st.selectbox("Select Student Profile:", u_opts)
+                u_sid = profile_mapping[u_disp]
+                
+                # Retrieve existing unmodified data
+                exist_stu = students_data.get(u_sid, {})
+                exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == u_sid), None)
+                exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
+                
+                # Determine display values and status for hardware IDs
+                if pending_reg:
+                    display_rfid = scanned_rfid
+                    display_fpid = scanned_fpid
+                    ur_status = "🟢 New Scan Ready to Bind"
+                    uf_status = "🟢 New Scan Ready to Bind"
+                    st.success(f"✅ New hardware scan detected! Auto-filled below ready for re-binding.")
+                    if st.button("🗑️ Clear Scan Data", key="clear_update"):
+                        db.reference('/pending_registration').delete(); st.rerun()
+                else:
+                    display_rfid = exist_card.get('card_id', '')
+                    display_fpid = exist_card.get('fingerprint_id', '')
+                    ur_status = "🔵 Current Bound ID"
+                    uf_status = "🔵 Current Bound Slot"
+
+                with st.form("update_form"):
+                    st.info("💡 Edit the details below. Unmodified fields will retain their existing data.")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        # Pre-fill with existing data to preserve it
+                        u_name = st.text_input("Full Name:", value=exist_stu.get('name', '')).strip()
+                        u_course = st.text_input("Academic Program:", value=exist_stu.get('course', '')).strip()
+                    with c2:
+                        u_rfid = st.text_input(f"RFID UID ({ur_status}):", value=display_rfid).strip()
+                        u_fpid = st.text_input(f"Fingerprint Token ({uf_status}):", value=display_fpid).strip()
+
+                    if st.form_submit_button("Save Updates / Apply Re-bind"):
+                        rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
+                        fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
+                        has_conflict = False
+                        
+                        if u_rfid and u_rfid in rfid_owners and rfid_owners[u_rfid] != u_sid:
+                            st.error(f"❌ **Hardware Conflict:** RFID UID `{u_rfid}` belongs to {rfid_owners[u_rfid]}."); has_conflict = True
+                        if u_fpid and u_fpid in fpid_owners and fpid_owners[u_fpid] != u_sid:
+                            st.error(f"❌ **Hardware Conflict:** FP Token `{u_fpid}` belongs to {fpid_owners[u_fpid]}."); has_conflict = True
+
+                        if not has_conflict:
+                            # Update with whatever is in the text boxes (preserves unmodified existing data)
+                            db.reference(f'/students/{u_sid}').update({
+                                "name": u_name, "course": u_course, "rfid": u_rfid if u_rfid else "Unlinked"
+                            })
+                            
+                            card_payload = {
+                                "student_id": u_sid, "name": u_name, "course": u_course,
+                                "card_id": u_rfid if u_rfid else "Unlinked", 
+                                "fingerprint_id": u_fpid if u_fpid else "Unlinked", 
+                                "registered_date": exist_stu.get('registered_date', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
+                            }
+                            
+                            if exist_card_key: db.reference(f'/cards/{exist_card_key}').update(card_payload)
+                            else: db.reference('/cards').push().set(card_payload)
+                            
+                            if pending_reg: db.reference('/pending_registration').delete()
+                            st.success(f"Profile {u_sid} successfully updated!"); time.sleep(1); st.rerun()
+            else:
+                st.info("No matching students found.")
+        else:
+            st.info("Registry is empty. Register a student in the New Registration tab first.")
+
+    # ---------------------------------------------------------
+    # TAB 3: MASTER REGISTRY
+    # ---------------------------------------------------------
     with tab_list:
         if students_data:
             master_registry = []
