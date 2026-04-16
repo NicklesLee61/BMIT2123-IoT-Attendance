@@ -31,23 +31,15 @@ if not firebase_admin._apps:
 # 2. DATA ENGINE: SMART PROCESSING & DURATION LOGIC
 # ==========================================================
 control_ref = db.reference('/control')
-hw_state = control_ref.get() or {"mode": "Attendance", "is_locked": False}
+hw_state = control_ref.get() or {"mode": "Attendance"}
 current_hw_mode = hw_state.get('mode', 'Attendance')
 
+# Fetch Main Data Nodes from Firebase
 students_data = db.reference('/students').get() or {} 
 cards_raw = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
-if isinstance(cards_raw, dict):
-    for push_id, card_info in cards_raw.items():
-        sid = card_info.get('student_id')
-        if sid and sid not in students_data:
-            students_data[sid] = {
-                "name": card_info.get('name', 'Unknown'),
-                "course": card_info.get('course', 'Unknown'),
-                "student_id": sid
-            }
-
+# Cross-reference students and cards for mapping
 profile_mapping = {}
 for sid, info in students_data.items():
     display_name = f"{info.get('name', 'Unknown')} ({sid})"
@@ -95,7 +87,7 @@ def display_flow_emoji(f):
     return f
 
 # ==========================================================
-# 3. SIDEBAR: PURE REMOTE HARDWARE COMMAND CENTER
+# 3. SIDEBAR: REMOTE CONTROL
 # ==========================================================
 st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
@@ -113,161 +105,155 @@ with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
-    # 🚀 UI SPLIT: 拆分为三个明确的 Tab
+    st.subheader("Student Enrollment & Management Hub")
+    
+    # 📡 CLOUD SYNC: Fetch IDs from hardware's last scan
+    pending_reg = db.reference('/pending_registration').get()
+    scanned_rfid = str(pending_reg.get('rfid', '')) if pending_reg else ""
+    scanned_fpid = str(pending_reg.get('fp_id', '')) if pending_reg else ""
+    
+    col_btn1, col_btn2 = st.columns([1, 4])
+    with col_btn1:
+        if st.button("🔄 Fetch Scanned Card", type="primary", use_container_width=True):
+            st.rerun()
+            
+    if pending_reg:
+        st.success(f"✅ Hardware scan captured! RFID: `{scanned_rfid}` | FP Slot: `{scanned_fpid}`")
+        if st.button("🗑️ Clear Scan Data"):
+            db.reference('/pending_registration').delete(); st.rerun()
+    else:
+        st.info("💡 Tip: Scan a card on the Raspberry Pi first, then click 'Fetch' to auto-fill details.")
+
+    # --- TABS FOR DIFFERENT FUNCTIONS ---
     tab_reg, tab_update, tab_list = st.tabs(["➕ New Registration", "🔄 Update / Re-bind", "🗃️ Master Registry"])
     
-    # --- 页面 1：注册纯新生 ---
+    # --- TAB 1: REGISTER NEW STUDENT ---
     with tab_reg:
-        st.subheader("Register New Student")
-        st.info("💡 Only use this tab for entirely new students. If a student already exists, use the Update tab.")
-        with st.form("enroll_form_new"):
+        st.markdown("### 📝 Create New Profile")
+        with st.form("new_student_form"):
             c1, c2 = st.columns(2)
             with c1:
-                n_id = st.text_input("Student ID (Required):").strip()
+                n_id = st.text_input("Student ID:").strip()
                 n_name = st.text_input("Full Name:").strip()
                 n_course = st.text_input("Academic Program:").strip()
             with c2:
-                n_rfid = st.text_input("New RFID UID:").strip()
-                n_fpid = st.text_input("Fingerprint Token (Slot ID):").strip()
-                n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-
-            if st.form_submit_button("Finalize New Registration"):
-                if not n_id:
-                    st.error("⚠️ Student ID is required.")
-                elif n_id in students_data:
-                    # 防止误覆盖老生资料
-                    st.error(f"❌ **Conflict:** Student ID `{n_id}` already exists! Please go to the 'Update / Re-bind' tab to modify their data.")
-                else:
-                    rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
-                    fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
-                    has_conflict = False
-                    
-                    if n_rfid and n_rfid in rfid_owners:
-                        st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by {rfid_owners[n_rfid]}."); has_conflict = True
-                    if n_fpid and n_fpid in fpid_owners:
-                        st.error(f"❌ **Hardware Conflict:** FP Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
-
-                    if not has_conflict:
-                        db.reference(f'/students/{n_id}').update({
-                            "student_id": n_id, "name": n_name if n_name else "Unknown",
-                            "rfid": n_rfid if n_rfid else "Unlinked", 
-                            "course": n_course if n_course else "Unknown", "registered_date": n_date
-                        })
-                        db.reference('/cards').push().set({
-                            "student_id": n_id, "name": n_name if n_name else "Unknown",
-                            "card_id": n_rfid if n_rfid else "Unlinked", 
-                            "course": n_course if n_course else "Unknown",
-                            "fingerprint_id": n_fpid if n_fpid else "Unlinked", "registered_date": n_date
-                        })
-                        st.success(f"Profile {n_id} successfully created!"); time.sleep(1); st.rerun()
-
-    # --- 页面 2：更新/补办旧生资料 ---
-    with tab_update:
-        st.subheader("Update Profile or Re-bind Card")
-        if not profile_mapping:
-            st.warning("No students registered yet. Please create a new profile first.")
-        else:
-            u_sc = st.text_input("🔍 Search Existing Student (by ID or Name):", placeholder="e.g. 24WMR...", key="update_search")
-            opts = sorted([p for p in profile_mapping.keys() if u_sc.lower() in p.lower()]) if u_sc else sorted(profile_mapping.keys())
+                # Auto-fills if scanned card is fetched
+                n_rfid = st.text_input("RFID UID (Auto-fillable):", value=scanned_rfid).strip()
+                n_fpid = st.text_input("Fingerprint Slot (Auto-fillable):", value=scanned_fpid).strip()
             
-            if opts:
-                u_disp = st.selectbox("Select Student to Update:", opts)
-                u_sid = profile_mapping[u_disp]
+            if st.form_submit_button("Finalize New Registration"):
+                if not n_id or not n_name:
+                    st.error("⚠️ Student ID and Name are required!")
+                elif n_id in students_data:
+                    st.error(f"❌ ID `{n_id}` already exists. Please use the 'Update' tab.")
+                else:
+                    # Update Firebase
+                    payload = {
+                        "student_id": n_id, "name": n_name, "course": n_course,
+                        "rfid": n_rfid if n_rfid else "Unlinked", 
+                        "registered_date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                    }
+                    db.reference(f'/students/{n_id}').set(payload)
+                    db.reference('/cards').push().set({**payload, "card_id": n_rfid, "fingerprint_id": n_fpid})
+                    
+                    if pending_reg: db.reference('/pending_registration').delete()
+                    st.success(f"🎉 Student {n_name} registered successfully!"); time.sleep(1); st.rerun()
+
+    # --- TAB 2: UPDATE OR RE-BIND (補辦卡/修改) ---
+    with tab_update:
+        st.markdown("### 🔄 Update Student Details or Re-bind Card")
+        if profile_mapping:
+            u_search = st.text_input("🔍 Search Student to Update (ID or Name):")
+            u_opts = sorted([p for p in profile_mapping.keys() if u_search.lower() in p.lower()]) if u_search else sorted(profile_mapping.keys())
+            
+            if u_opts:
+                u_selected = st.selectbox("Select Student Profile:", u_opts)
+                u_sid = profile_mapping[u_selected]
                 
-                # 获取该生现有的资料，用于自动填入
-                exist_stu = students_data.get(u_sid, {})
-                exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == u_sid), None)
-                exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
-                
-                with st.form("update_form"):
-                    st.info(f"Currently Editing: **{exist_stu.get('name', 'Unknown')} ({u_sid})**")
+                # Fetch EXISTING data from Firebase
+                curr_stu = students_data.get(u_sid, {})
+                # Find their card details in the /cards node
+                card_node_key = next((k for k, v in cards_raw.items() if v.get('student_id') == u_sid), None)
+                curr_card = cards_raw.get(card_node_key, {}) if card_node_key else {}
+
+                with st.form("update_student_form"):
+                    st.write(f"**Target Student:** {curr_stu.get('name')} ({u_sid})")
                     uc1, uc2 = st.columns(2)
                     with uc1:
-                        u_name = st.text_input("Update Full Name:", value=exist_stu.get('name', '')).strip()
-                        u_course = st.text_input("Update Course:", value=exist_stu.get('course', '')).strip()
+                        u_name = st.text_input("Update Name:", value=curr_stu.get('name', ''))
+                        u_course = st.text_input("Update Course:", value=curr_stu.get('course', ''))
                     with uc2:
-                        u_rfid = st.text_input("Update RFID UID:", value=exist_card.get('card_id', '') if exist_card.get('card_id') != 'Unlinked' else '').strip()
-                        u_fpid = st.text_input("Update FP Token (Slot ID):", value=exist_card.get('fingerprint_id', '') if exist_card.get('fingerprint_id') != 'Unlinked' else '').strip()
-                        u_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                        # LOGIC: Use newly scanned ID if available, otherwise show existing one from Firebase
+                        final_rfid = scanned_rfid if scanned_rfid else curr_card.get('card_id', '')
+                        final_fpid = scanned_fpid if scanned_fpid else curr_card.get('fingerprint_id', '')
                         
-                    if st.form_submit_button("Save Updates / Bind New Card"):
-                        rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
-                        fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
-                        has_conflict = False
-                        
-                        # 确保新绑定的卡不是其他人的
-                        if u_rfid and u_rfid in rfid_owners and rfid_owners[u_rfid] != u_sid:
-                            st.error(f"❌ **Hardware Conflict:** RFID UID `{u_rfid}` belongs to Student {rfid_owners[u_rfid]}."); has_conflict = True
-                        if u_fpid and u_fpid in fpid_owners and fpid_owners[u_fpid] != u_sid:
-                            st.error(f"❌ **Hardware Conflict:** FP Token `{u_fpid}` belongs to Student {fpid_owners[u_fpid]}."); has_conflict = True
-                            
-                        if not has_conflict:
-                            db.reference(f'/students/{u_sid}').update({
-                                "name": u_name if u_name else exist_stu.get('name', 'Unknown'),
-                                "rfid": u_rfid if u_rfid else "Unlinked", 
-                                "course": u_course if u_course else exist_stu.get('course', 'Unknown')
-                            })
-                            card_payload = {
-                                "student_id": u_sid, 
-                                "name": u_name if u_name else exist_stu.get('name', 'Unknown'),
-                                "card_id": u_rfid if u_rfid else "Unlinked", 
-                                "course": u_course if u_course else exist_stu.get('course', 'Unknown'),
-                                "fingerprint_id": u_fpid if u_fpid else "Unlinked", 
-                                "registered_date": u_date
-                            }
-                            if exist_card_key: db.reference(f'/cards/{exist_card_key}').update(card_payload)
-                            else: db.reference('/cards').push().set(card_payload)
-                            
-                            st.success(f"Profile {u_sid} successfully updated!"); time.sleep(1); st.rerun()
-            else:
-                st.info("No matching students found.")
+                        u_rfid = st.text_input("RFID UID (Update if scanned):", value=final_rfid)
+                        u_fpid = st.text_input("FP Slot (Update if scanned):", value=final_fpid)
 
-    # --- 页面 3：删除与总表 (无修改) ---
+                    if st.form_submit_button("Save Changes / Apply Re-bind"):
+                        # Update student info
+                        db.reference(f'/students/{u_sid}').update({
+                            "name": u_name, "course": u_course, "rfid": u_rfid
+                        })
+                        # Update/Add card info
+                        card_data = {
+                            "student_id": u_sid, "name": u_name, "course": u_course,
+                            "card_id": u_rfid, "fingerprint_id": u_fpid,
+                            "registered_date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                        }
+                        if card_node_key:
+                            db.reference(f'/cards/{card_node_key}').update(card_data)
+                        else:
+                            db.reference('/cards').push().set(card_data)
+
+                        if pending_reg: db.reference('/pending_registration').delete()
+                        st.success("✅ Student profile and hardware IDs updated!"); time.sleep(1); st.rerun()
+            else:
+                st.warning("No students found matching your search.")
+        else:
+            st.info("Registry is empty. Register a student first.")
+
+    # --- TAB 3: MASTER REGISTRY (DELETE/VIEW) ---
     with tab_list:
         if students_data:
-            master_registry = []
+            master_list = []
             for sid, info in students_data.items():
-                card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
-                master_registry.append({"student_id": sid, "name": info.get('name', 'N/A'), "course": info.get('course', 'N/A'), "RFID_UID": card_info.get('card_id', 'Unlinked'), "FP_ID": card_info.get('fingerprint_id', 'N/A')})
-            reg_df = pd.DataFrame(master_registry).sort_values("student_id")
-            search_query = st.text_input("🔍 Search Student (by ID, Name, or Course):", placeholder="e.g. 2413458, Sakiko...")
-            if search_query:
-                reg_df = reg_df[reg_df[['student_id', 'name', 'course']].apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)]
-            reg_df = reg_df.reset_index(drop=True); reg_df.index += 1
-            st.dataframe(reg_df, use_container_width=True)
+                # Try to find corresponding card info
+                c_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
+                master_list.append({
+                    "Student ID": sid, "Name": info.get('name'), "Course": info.get('course'),
+                    "Current RFID": c_info.get('card_id', 'Unlinked'),
+                    "FP Slot": c_info.get('fingerprint_id', 'N/A')
+                })
+            reg_df = pd.DataFrame(master_list).sort_values("Student ID")
+            st.dataframe(reg_df, use_container_width=True, hide_index=True)
             
-            st.markdown("---")
-            st.subheader("⚠️ Danger Zone: Remove Student")
-            if profile_mapping:
-                del_disp = st.selectbox("Select Student Profile to remove:", sorted(profile_mapping.keys()))
-                if 'delete_target' not in st.session_state: st.session_state['delete_target'] = None
-                if st.session_state['delete_target'] != del_disp: st.session_state['delete_target'] = None
-                
-                if st.session_state['delete_target'] != del_disp:
-                    if st.button("🗑️ Request Profile Deletion"): st.session_state['delete_target'] = del_disp; st.rerun()
-                else:
-                    st.error(f"🛑 ARE YOU SURE? This will permanently erase **{del_disp}**.")
-                    cc1, cc2 = st.columns(2)
-                    with cc1:
-                        if st.button("✅ Yes, Delete", type="primary"):
-                            del_id = profile_mapping[del_disp]
-                            db.reference(f'/students/{del_id}').delete()
-                            ckey = next((k for k, v in cards_raw.items() if v.get('student_id') == del_id), None)
-                            if ckey: db.reference(f'/cards/{ckey}').delete()
-                            st.session_state['delete_target'] = None; st.rerun()
-                    with cc2:
-                        if st.button("❌ Cancel"): st.session_state['delete_target'] = None; st.rerun()
+            st.write("---")
+            st.subheader("⚠️ Danger Zone")
+            del_target = st.selectbox("Select Profile to Permanently REMOVE:", ["-- Select --"] + sorted(profile_mapping.keys()))
+            if del_target != "-- Select --":
+                if st.button("🗑️ Delete Student Profile", type="primary"):
+                    sid_to_del = profile_mapping[del_target]
+                    # Delete from both nodes
+                    db.reference(f'/students/{sid_to_del}').delete()
+                    ckey = next((k for k, v in cards_raw.items() if v.get('student_id') == sid_to_del), None)
+                    if ckey: db.reference(f'/cards/{ckey}').delete()
+                    st.error(f"Erased {del_target}"); time.sleep(1); st.rerun()
 
 else:
+    # ==========================================================
+    # 5. ATTENDANCE TABS (LIVE / CONSOLE / REPORTING)
+    # ==========================================================
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
     
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
         if not df_all.empty:
-            c1, c2 = st.columns(2)
-            with c1: sel_date = st.date_input("📅 Date:", datetime.now(), key="l_date")
-            with c2: search_l = st.text_input("🔍 Search Record (by ID or Name):", key="l_search")
-            view_df = df_all[df_all['record_date'] == sel_date.strftime("%Y-%m-%d")]
+            lc1, lc2 = st.columns(2)
+            with lc1: l_date = st.date_input("📅 Date:", datetime.now())
+            with lc2: l_search = st.text_input("🔍 Search Record (ID/Name):")
+            
+            view_df = df_all[df_all['record_date'] == l_date.strftime("%Y-%m-%d")]
             if not view_df.empty:
                 latest = view_df.drop_duplicates(subset=['student_id'], keep='last')
                 k1, k2, k3, k4 = st.columns(4)
@@ -276,176 +262,95 @@ else:
                 k3.metric("🟠 Late", len(latest[latest['status'] == 'late']))
                 k4.metric("🔵 Leave", len(latest[latest['status'] == 'leave']))
                 st.write("---")
+                
                 disp = view_df[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
-                if search_l: disp = disp[disp[['student_id', 'name']].apply(lambda row: row.astype(str).str.contains(search_l, case=False).any(), axis=1)]
+                if l_search: disp = disp[disp[['student_id', 'name']].apply(lambda r: r.astype(str).str.contains(l_search, case=False).any(), axis=1)]
                 
                 if not disp.empty:
                     disp['status'] = disp['status'].apply(display_status_emoji); disp['flow_type'] = disp['flow_type'].apply(display_flow_emoji)
-                    disp = disp.reset_index(drop=True); disp.index += 1
-                    st.dataframe(disp, use_container_width=True)
-                else: st.warning(f"No matching records found for '{search_l}'.")
-            else: st.info(f"No records for {sel_date.strftime('%Y-%m-%d')}.")
+                    st.dataframe(disp, use_container_width=True, hide_index=True)
+                else: st.warning("No records match your search.")
+            else: st.info(f"No records for {l_date}.")
         else: st.info("Waiting for hardware synchronization...")
 
     with tab_console:
         st.header("🛠️ Attendance Management Console")
         st.write("---")
         ca, cm = st.columns(2, gap="large")
-        
         with ca:
             with st.container(border=True):
                 st.markdown("### ➕ Create Manual Record")
-                st.write("Forbid hardware and manually force a log.")
-                st.write("<br>", unsafe_allow_html=True)
-                sc = st.text_input("🔍 Search Profile (by ID or Name):", key="m_sc", label_visibility="collapsed", placeholder="e.g. Sakiko...")
-                with st.form("add_form", clear_on_submit=True):
-                    if profile_mapping:
-                        opts = sorted([p for p in profile_mapping.keys() if sc.lower() in p.lower()]) if sc else sorted(profile_mapping.keys())
-                        if opts:
-                            m_disp = st.selectbox("Selected Student Profile:", opts)
-                            st.write("<br>", unsafe_allow_html=True)
-                            d1, t1 = st.columns(2)
-                            md = d1.date_input("Date:", datetime.now(), key="m_d")
-                            mt = t1.time_input("Time:", dt_time(9, 0))
-                            st.write("<br>", unsafe_allow_html=True)
-                            ms = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
-                            st.write("<br>", unsafe_allow_html=True)
-                            if st.form_submit_button("Force Sync New Record", type="primary"):
-                                m_sid = profile_mapping[m_disp]
-                                db.reference(f'/attendance/{md.strftime("%Y-%m-%d")}').push().set({'student_id': m_sid, 'name': students_data[m_sid].get('name'), 'status': ms, 'timestamp': int(datetime.combine(md, mt).timestamp()), 'verification_method': "Manual_Admin"})
-                                st.toast(f"✅ Record created!")
-                                time.sleep(1); st.rerun()
-                        else:
-                            st.warning("No matches found. Clear search box.")
-                            st.form_submit_button("Force Sync", disabled=True)
-                            
+                sc = st.text_input("🔍 Search Profile (ID/Name):", placeholder="e.g. Sakiko...")
+                with st.form("manual_add", clear_on_submit=True):
+                    opts = sorted([p for p in profile_mapping.keys() if sc.lower() in p.lower()]) if sc else sorted(profile_mapping.keys())
+                    m_sel = st.selectbox("Target Student:", opts) if opts else None
+                    d1, t1 = st.columns(2)
+                    md = d1.date_input("Date:", datetime.now())
+                    mt = t1.time_input("Time:", dt_time(9, 0))
+                    ms = st.selectbox("Status:", ["present", "absent", "late", "leave"])
+                    if st.form_submit_button("Force Sync Record", type="primary") and m_sel:
+                        m_sid = profile_mapping[m_sel]
+                        db.reference(f'/attendance/{md.strftime("%Y-%m-%d")}').push().set({
+                            'student_id': m_sid, 'name': students_data[m_sid].get('name'), 
+                            'status': ms, 'timestamp': int(datetime.combine(md, mt).timestamp()), 
+                            'verification_method': "Manual_Admin"
+                        })
+                        st.success("Record created!"); time.sleep(1); st.rerun()
+
         with cm:
             with st.container(border=True):
-                st.markdown("### 📝 Modify or Delete Entries")
-                st.write("Manage historical database records.")
-                st.write("<br>", unsafe_allow_html=True)
+                st.markdown("### 📝 Modify / Delete Records")
                 if not df_all.empty:
-                    st.markdown("##### 1. Find the Record")
-                    sa = st.checkbox("🕰️ View All History (Disable Date Filter)", key="m_sa")
-                    f1, f2 = st.columns([1.5, 2])
-                    fd = f1.date_input("Filter Date:", datetime.now(), disabled=sa, key="m_fd")
-                    fo = ["-- All Students --"] + sorted(profile_mapping.keys())
-                    fs = f2.selectbox("Filter Student:", fo, key="m_fs")
+                    sa = st.checkbox("🕰️ View All History")
+                    f1, f2 = st.columns(2)
+                    fd = f1.date_input("Filter Date:", datetime.now(), disabled=sa)
+                    fs = f2.selectbox("Filter Student:", ["-- All Students --"] + sorted(profile_mapping.keys()))
                     f_df = df_all.copy() if sa else df_all[df_all['record_date'] == fd.strftime("%Y-%m-%d")]
                     if fs != "-- All Students --": f_df = f_df[f_df['student_id'] == profile_mapping[fs]]
                     
-                    st.write("---")
                     if not f_df.empty:
-                        lbls = f_df['formatted_time'] + " | " + f_df['name'] + " (" + f_df['status'].apply(display_status_emoji) + ")"
-                        st.markdown("##### 2. Select entry to manage:")
-                        to_m = st.selectbox("Records Selector:", lbls.tolist(), label_visibility="collapsed")
+                        lbls = f_df['formatted_time'] + " | " + f_df['name'] + " (" + f_df['status'] + ")"
+                        to_m = st.selectbox("Select Entry:", lbls.tolist())
                         row = f_df[lbls == to_m].iloc[0]
-                        with st.expander("✏️ Update status for this entry", expanded=True):
-                            ns = st.selectbox("Change status to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
-                            if st.button("Submit Status Update", type="secondary"): 
-                                db.reference(f'/attendance/{row["firebase_path"]}').update({'status': ns, 'verification_method': "Admin_Manual_Update"})
-                                st.toast("✅ Record updated!")
-                                time.sleep(1); st.rerun()
-                        st.write("<br>", unsafe_allow_html=True)
-                        if st.button("🗑️ Permanently Delete Entry", key="m_del"): 
+                        if st.button("🗑️ Delete This Record", use_container_width=True):
                             db.reference(f'/attendance/{row["firebase_path"]}').delete()
-                            st.toast("🗑️ Record erased.")
-                            time.sleep(1); st.rerun()
-                    else: st.info("No records match your filters.")
-                else: st.info("No attendance records in database.")
+                            st.error("Record deleted."); time.sleep(1); st.rerun()
+                    else: st.info("No records found.")
 
-    # ==========================================================
-    # 📊 tab_m3: REDESIGNED MULTI-PAGE ANALYTICS 
-    # ==========================================================
     with tab_m3:
         st.header("📊 Advanced Analytics Dashboard")
-        st.write("Real-time behavioral insights and comprehensive student performance tracking.")
-        
         if not df_all.empty:
-            color_map = {
-                'present': '#2ecc71',
-                'absent': '#e74c3c',
-                'absent (Medical Leave)': '#e74c3c',
-                'late': '#f39c12',
-                'leave': '#3498db'
-            }
-
-            sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
+            color_map = {'present': '#2ecc71', 'absent': '#e74c3c', 'late': '#f39c12', 'leave': '#3498db'}
+            sub1, sub2, sub3 = st.tabs(["📑 Overview", "📈 Trends", "📥 Export"])
             
-            with sub_tab1:
-                st.markdown("##### 📌 High-Level KPIs")
-                a_col1, a_col2 = st.columns(2)
-                a_col1.metric("Active Students Tracked", df_all['student_id'].nunique())
-                a_col2.metric("Days Tracked", df_all['record_date'].nunique())
-                st.write("---")
-                
-                with st.container(border=True):
-                    st.subheader("🍩 Status Composition")
-                    st.caption("Overall class participation distribution")
-                    s_c = df_all['status'].value_counts().reset_index()
-                    s_c.columns = ['Status', 'Count']
-                    fig_pie = px.pie(s_c, values="Count", names="Status", hole=0.45, color="Status", color_discrete_map=color_map)
-                    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-                    fig_pie.update_layout(showlegend=True, margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(fig_pie, use_container_width=True)
+            with sub1:
+                kcol1, kcol2 = st.columns(2)
+                kcol1.metric("Active Students Tracked", df_all['student_id'].nunique())
+                kcol2.metric("Days Tracked", df_all['record_date'].nunique())
+                s_c = df_all['status'].value_counts().reset_index()
+                s_c.columns = ['Status', 'Count']
+                fig_pie = px.pie(s_c, values="Count", names="Status", hole=0.45, color="Status", color_discrete_map=color_map)
+                st.plotly_chart(fig_pie, use_container_width=True)
 
-            with sub_tab2:
-                with st.container(border=True):
-                    st.subheader("📈 Daily Attendance Trend")
-                    st.caption("Tracking daily attendance variations over time")
-                    unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
-                    if not unique_daily.empty:
-                        daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
-                        chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
-                        st.bar_chart(chart_data, use_container_width=True)
-                st.write("<br>", unsafe_allow_html=True)
-                
-                with st.container(border=True):
-                    st.subheader("⏱️ Stay Duration Analysis")
-                    st.caption("Active hours spent in today's session (Check-in to Check-out)")
-                    dur_data = []
-                    today_s = datetime.now().strftime("%Y-%m-%d")
-                    valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
-                    for sid in students_data.keys():
-                        p_t = valid_df[(valid_df['student_id'] == sid) & (valid_df['record_date'] == today_s)].sort_values('dt_obj')
-                        if len(p_t) >= 2: 
-                            hrs = round((p_t.iloc[-1]['dt_obj'] - p_t.iloc[0]['dt_obj']).total_seconds() / 3600, 2)
-                            dur_data.append({"ID": sid, "Hrs": hrs}) 
-                    if dur_data: 
-                        dur_df = pd.DataFrame(dur_data)
-                        st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
-                    else: 
-                        st.info("💡 Insufficient data for today's duration analysis (Requires both Check-in and Check-out logs).")
+            with sub2:
+                unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
+                daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
+                chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
+                st.bar_chart(chart_data)
 
-            with sub_tab3:
-                with st.container(border=True):
-                    st.subheader("📥 Data Export Center")
-                    st.write("Filter, review the raw dataset, and generate the official Excel report.")
-                    
-                    export_filter = st.radio("Select Export Range:", ["All Time (Full History)", "Specific Date"], horizontal=True)
-                    
-                    if export_filter == "Specific Date":
-                        export_date = st.date_input("Select Date to Export:", datetime.now(), key="export_date_input")
-                        export_df = df_all[df_all['record_date'] == export_date.strftime("%Y-%m-%d")]
-                    else:
-                        export_df = df_all.copy()
-                    
-                    st.write("---")
-                    
-                    if not export_df.empty:
-                        st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
-                        st.write("<br>", unsafe_allow_html=True)
-                        
-                        buf = io.BytesIO()
-                        with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
-                            export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
-                        
-                        file_suffix = "All_Time" if export_filter == "All Time (Full History)" else export_date.strftime("%Y%m%d")
-                        file_name = f"Smart_Campus_Report_{file_suffix}.xlsx"
-                        
-                        st.download_button("📂 Download Official Attendance Report (.xlsx)", data=buf.getvalue(), file_name=file_name, use_container_width=True, type="primary")
-                    else:
-                        st.info("⚠️ No records found for the selected filter.")
-                        
-        else: 
-            st.warning("⚠️ No analytics available yet. Synchronize hardware logs first.")
+            with sub3:
+                st.markdown("#### 📥 Data Export Center")
+                ex_filter = st.radio("Range:", ["All Time", "Specific Date"], horizontal=True)
+                if ex_filter == "Specific Date":
+                    ex_d = st.date_input("Select Date:", datetime.now())
+                    ex_df = df_all[df_all['record_date'] == ex_d.strftime("%Y-%m-%d")]
+                else: ex_df = df_all.copy()
+                
+                if not ex_df.empty:
+                    st.dataframe(ex_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type']].sort_values('formatted_time', ascending=False), use_container_width=True, hide_index=True)
+                    buf = io.BytesIO()
+                    with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
+                        ex_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
+                    st.download_button("📂 Download Excel Report", data=buf.getvalue(), file_name=f"Report_{ex_filter}.xlsx", type="primary", use_container_width=True)
+                else: st.info("No data to export.")
+        else: st.warning("No analytics available yet.")
