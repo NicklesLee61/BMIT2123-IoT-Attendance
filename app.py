@@ -8,6 +8,20 @@ import time
 import io
 
 # ==========================================================
+# 🚀 GLOBAL FACULTY LIST (From User Image)
+# ==========================================================
+FACULTIES = [
+    "FAFB: Faculty of Accountancy, Finance and Business",
+    "FOAS: Faculty of Applied Sciences",
+    "FOBE: Faculty of Built Environment",
+    "FCCI: Faculty of Communication and Creative Industries",
+    "FOCS: Faculty of Computing and Information Technology",
+    "FOET: Faculty of Engineering and Technology",
+    "FSSH: Faculty of Social Science and Humanities",
+    "Unknown / Other"
+]
+
+# ==========================================================
 # 1. SYSTEM INITIALIZATION & SECURE CLOUD AUTHENTICATION
 # ==========================================================
 st.set_page_config(page_title="IoT Master Command", layout="wide", page_icon="🛡️")
@@ -44,7 +58,7 @@ if isinstance(cards_raw, dict):
         if sid and sid not in students_data:
             students_data[sid] = {
                 "name": card_info.get('name', 'Unknown'),
-                "course": card_info.get('course', 'Unknown'),
+                "course": card_info.get('course', 'Unknown / Other'),
                 "student_id": sid
             }
 
@@ -76,6 +90,10 @@ if not df_all.empty:
         return "Check-in" if row['tap_rank'] % 2 != 0 else "Check-out"
             
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
+    
+    # 🚀 NEW: Map the student's Faculty into the Attendance DataFrame for analytics
+    course_map = {k: v.get('course', 'Unknown / Other') for k, v in students_data.items()}
+    df_all['course'] = df_all['student_id'].map(course_map).fillna('Unknown / Other')
 
 # ==========================================================
 # 🚀 GLOBAL UI HELPER: Emoji Formatters
@@ -115,7 +133,6 @@ st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 if current_hw_mode == "Enrollment":
     st.subheader("Student Enrollment & Management Hub")
     
-    # Global pending registration check
     pending_reg = db.reference('/pending_registration').get()
     scanned_rfid = str(pending_reg.get('rfid', '')) if pending_reg else ""
     scanned_fpid = str(pending_reg.get('fp_id', '')) if pending_reg else ""
@@ -128,7 +145,6 @@ if current_hw_mode == "Enrollment":
     with tab_reg:
         st.markdown("### 📝 Register New Student")
         
-        # Independent Fetch Button for this page
         col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
             if st.button("🔄 Fetch Scanned Card", key="fetch_new", type="primary"):
@@ -150,9 +166,9 @@ if current_hw_mode == "Enrollment":
             with c1:
                 n_id = st.text_input("Student ID (Required):").strip()
                 n_name = st.text_input("Full Name:").strip()
-                n_course = st.text_input("Academic Program:").strip()
+                # 🚀 CHANGED: Text Input to Selectbox
+                n_course = st.selectbox("Academic Faculty / Program:", FACULTIES)
             with c2:
-                # Auto-fill using scanned data with status shown in label
                 n_rfid = st.text_input(f"RFID UID ({r_status}):", value=scanned_rfid).strip()
                 n_fpid = st.text_input(f"Fingerprint Token ({f_status}):", value=scanned_fpid).strip()
                 n_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -186,12 +202,11 @@ if current_hw_mode == "Enrollment":
                         st.success(f"Profile {n_name} ({n_id}) successfully created!"); time.sleep(1); st.rerun()
 
     # ---------------------------------------------------------
-    # TAB 2: UPDATE / RE-BIND (PRESERVES UNMODIFIED DATA)
+    # TAB 2: UPDATE / RE-BIND 
     # ---------------------------------------------------------
     with tab_update:
         st.markdown("### 🔄 Update Student Details / Re-bind Card")
         
-        # Independent Fetch Button for this page
         ucol_btn1, ucol_btn2 = st.columns([1, 4])
         with ucol_btn1:
             if st.button("🔄 Fetch Scanned Card", key="fetch_update", type="primary"):
@@ -205,12 +220,10 @@ if current_hw_mode == "Enrollment":
                 u_disp = st.selectbox("Select Student Profile:", u_opts)
                 u_sid = profile_mapping[u_disp]
                 
-                # Retrieve existing unmodified data
                 exist_stu = students_data.get(u_sid, {})
                 exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == u_sid), None)
                 exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
                 
-                # Determine display values and status for hardware IDs
                 if pending_reg:
                     display_rfid = scanned_rfid
                     display_fpid = scanned_fpid
@@ -229,9 +242,13 @@ if current_hw_mode == "Enrollment":
                     st.info("💡 Edit the details below. Unmodified fields will retain their existing data.")
                     c1, c2 = st.columns(2)
                     with c1:
-                        # Pre-fill with existing data to preserve it
                         u_name = st.text_input("Full Name:", value=exist_stu.get('name', '')).strip()
-                        u_course = st.text_input("Academic Program:", value=exist_stu.get('course', '')).strip()
+                        
+                        # 🚀 CHANGED: Auto-match existing course in selectbox
+                        exist_course = exist_stu.get('course', 'Unknown / Other')
+                        c_index = FACULTIES.index(exist_course) if exist_course in FACULTIES else len(FACULTIES)-1
+                        u_course = st.selectbox("Academic Faculty / Program:", FACULTIES, index=c_index)
+                        
                     with c2:
                         u_rfid = st.text_input(f"RFID UID ({ur_status}):", value=display_rfid).strip()
                         u_fpid = st.text_input(f"Fingerprint Token ({uf_status}):", value=display_fpid).strip()
@@ -247,7 +264,6 @@ if current_hw_mode == "Enrollment":
                             st.error(f"❌ **Hardware Conflict:** FP Token `{u_fpid}` belongs to {fpid_owners[u_fpid]}."); has_conflict = True
 
                         if not has_conflict:
-                            # Update with whatever is in the text boxes (preserves unmodified existing data)
                             db.reference(f'/students/{u_sid}').update({
                                 "name": u_name, "course": u_course, "rfid": u_rfid if u_rfid else "Unlinked"
                             })
@@ -438,6 +454,35 @@ else:
                     fig_pie.update_layout(showlegend=True, margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig_pie, use_container_width=True)
 
+                st.write("<br>", unsafe_allow_html=True)
+                
+                # 🚀 NEW: Faculty Attendance Rate Visualization
+                with st.container(border=True):
+                    st.subheader("🏛️ Faculty Attendance Rates")
+                    st.caption("Overall 'Present' rate broken down by Academic Program")
+                    
+                    # Calculate Present Rate per Course
+                    fac_rate = df_all.groupby('course').apply(
+                        lambda x: pd.Series({
+                            'Total': len(x),
+                            'Present': (x['status'] == 'present').sum()
+                        })
+                    ).reset_index()
+                    
+                    # Prevent division by zero
+                    fac_rate['Rate (%)'] = fac_rate.apply(lambda row: round((row['Present'] / row['Total']) * 100, 1) if row['Total'] > 0 else 0, axis=1)
+                    
+                    # Truncate long names for better charting
+                    fac_rate['Short Faculty'] = fac_rate['course'].apply(lambda x: x.split(':')[0] if ':' in x else x)
+                    
+                    fig_fac = px.bar(fac_rate, x='Short Faculty', y='Rate (%)', text='Rate (%)', 
+                                     color='Short Faculty', 
+                                     hover_data={'course': True, 'Total': True, 'Present': True, 'Short Faculty': False},
+                                     labels={'Short Faculty': 'Faculty', 'Rate (%)': 'Attendance Rate (%)'})
+                    fig_fac.update_traces(textposition='outside')
+                    fig_fac.update_layout(showlegend=False, xaxis_title="", yaxis_range=[0, 110], margin=dict(t=30, b=0))
+                    st.plotly_chart(fig_fac, use_container_width=True)
+
             with sub_tab2:
                 with st.container(border=True):
                     st.subheader("📈 Daily Attendance Trend")
@@ -482,12 +527,12 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
+                        st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
                         
                         buf = io.BytesIO()
                         with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
-                            export_df[['formatted_time', 'name', 'student_id', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
+                            export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
                         
                         file_suffix = "All_Time" if export_filter == "All Time (Full History)" else export_date.strftime("%Y%m%d")
                         file_name = f"Smart_Campus_Report_{file_suffix}.xlsx"
