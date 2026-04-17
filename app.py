@@ -103,7 +103,6 @@ def display_status_emoji(s):
     elif 'absent' in s_lower: return f"🔴 {s}"
     elif 'late' in s_lower: return f"🟠 {s}"
     elif 'leave' in s_lower: return f"🔵 {s}"
-    elif 'checked' in s_lower: return f"🔵 {s}"
     return s
     
 def display_flow_emoji(f):
@@ -119,9 +118,10 @@ st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
 
 with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
-    next_mode = "Enrollment" if current_hw_mode == "Attendance" else "Attendance"
-    if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_container_width=True):
-        control_ref.update({"mode": next_mode})
+    target_mode = st.selectbox("Switch Mode:", ["Attendance", "Enrollment"], 
+                               index=0 if current_hw_mode == "Attendance" else 1)
+    if st.sidebar.button("Apply Mode Update"):
+        control_ref.update({"mode": target_mode})
         st.rerun()
 
 # ==========================================================
@@ -177,6 +177,7 @@ if current_hw_mode == "Enrollment":
                 elif n_id in students_data:
                     st.error(f"❌ **ID Conflict:** Student ID `{n_id}` already exists. Use the 'Update Student Details' tab instead.")
                 else:
+                    # 🚀 Enhanced Strict Uniqueness Check (strip spaces to prevent bypass)
                     rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                     fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                     has_conflict = False
@@ -251,6 +252,7 @@ if current_hw_mode == "Enrollment":
                         u_fpid = st.text_input(f"Fingerprint Token ({uf_status}):", value=display_fpid).strip()
 
                     if st.form_submit_button("Save Updates / Apply Re-bind"):
+                        # 🚀 Enhanced Strict Uniqueness Check
                         rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                         fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                         has_conflict = False
@@ -291,8 +293,8 @@ if current_hw_mode == "Enrollment":
             for sid, info in students_data.items():
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
                 raw_course = str(info.get('course', 'N/A'))
-                # 🚀 ENHANCED CLEANSING: Cut off at '(' OR ':' to catch ALL dirty historical data
-                short_course = raw_course.split('(')[0].split(':')[0].strip()
+                # 🚀 CHANGED: Split by parenthesis instead of colon
+                short_course = raw_course.split('(')[0].strip() if '(' in raw_course else raw_course
                 
                 master_registry.append({
                     "student_id": sid, 
@@ -347,7 +349,7 @@ else:
                 k1.metric("🟢 Present", len(latest[latest['status'] == 'present']))
                 k2.metric("🔴 Absent", len(latest[latest['status'].astype(str).str.contains('absent', case=False)]))
                 k3.metric("🟠 Late", len(latest[latest['status'] == 'late']))
-                k4.metric("🔵 Checked Out", len(latest[latest['status'].astype(str).str.contains('leave|checked', case=False)]))
+                k4.metric("🔵 Leave", len(latest[latest['status'] == 'leave']))
                 st.write("---")
                 disp = view_df[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
                 if search_l: disp = disp[disp[['student_id', 'name']].apply(lambda row: row.astype(str).str.contains(search_l, case=False).any(), axis=1)]
@@ -381,7 +383,7 @@ else:
                             md = d1.date_input("Date:", datetime.now(), key="m_d")
                             mt = t1.time_input("Time:", dt_time(9, 0))
                             st.write("<br>", unsafe_allow_html=True)
-                            ms = st.selectbox("Status:", ["present", "absent", "late", "checked_out", "leave"], format_func=display_status_emoji)
+                            ms = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
                             st.write("<br>", unsafe_allow_html=True)
                             if st.form_submit_button("Force Sync New Record", type="primary"):
                                 m_sid = profile_mapping[m_disp]
@@ -414,7 +416,7 @@ else:
                         to_m = st.selectbox("Records Selector:", lbls.tolist(), label_visibility="collapsed")
                         row = f_df[lbls == to_m].iloc[0]
                         with st.expander("✏️ Update status for this entry", expanded=True):
-                            ns = st.selectbox("Change status to:", ["present", "absent", "late", "checked_out", "leave"], format_func=display_status_emoji)
+                            ns = st.selectbox("Change status to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
                             if st.button("Submit Status Update", type="secondary"): 
                                 db.reference(f'/attendance/{row["firebase_path"]}').update({'status': ns, 'verification_method': "Admin_Manual_Update"})
                                 st.toast("✅ Record updated!")
@@ -435,14 +437,12 @@ else:
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
-            # 🚀 ENHANCED COLOR MAP: Added 'Checked Out' formatting
             color_map = {
-                'Present': '#2ecc71',
-                'Checked Out': '#1abc9c', # Teal color for checked out
-                'Absent': '#e74c3c',
-                'Absent (Medical Leave)': '#c0392b',
-                'Late': '#f39c12',
-                'Leave': '#3498db'
+                'present': '#2ecc71',
+                'absent': '#e74c3c',
+                'absent (Medical Leave)': '#e74c3c',
+                'late': '#f39c12',
+                'leave': '#3498db'
             }
 
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
@@ -457,13 +457,8 @@ else:
                 with st.container(border=True):
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
-                    
-                    # Clean the status strings for pie chart (e.g. "checked_out" -> "Checked Out")
                     s_c = df_all['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
-                    s_c['Status'] = s_c['Status'].astype(str).apply(lambda x: x.replace('_', ' ').title())
-                    s_c = s_c.groupby('Status', as_index=False).sum() # Group duplicates after capitalization
-                    
                     fig_pie = px.pie(s_c, values="Count", names="Status", hole=0.45, color="Status", color_discrete_map=color_map)
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                     fig_pie.update_layout(showlegend=True, margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor="rgba(0,0,0,0)")
@@ -480,8 +475,8 @@ else:
                     stu_list = []
                     for sid_reg, info_reg in students_data.items():
                         raw_c = info_reg.get('course', 'Unknown / Other')
-                        # 🚀 ENHANCED CLEANSING: Split by '(' OR ':' for chart labels
-                        clean_c = str(raw_c).split('(')[0].split(':')[0].strip().upper()
+                        # 🚀 CHANGED: Split by parenthesis instead of colon for charts
+                        clean_c = str(raw_c).split('(')[0].strip().upper()
                         stu_list.append({'student_id': sid_reg, 'Clean_Faculty': clean_c})
                     
                     df_stu = pd.DataFrame(stu_list)
@@ -493,7 +488,7 @@ else:
                         
                         if not day_records.empty:
                             day_records = day_records.copy()
-                            day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split('(')[0].split(':')[0].strip().upper())
+                            day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split('(')[0].strip().upper())
                             day_unique = day_records.drop_duplicates(subset=['student_id'], keep='last')
                             
                             day_present = day_unique[day_unique['status'].astype(str).str.lower().isin(['present', 'late'])]
@@ -571,8 +566,8 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        # 🚀 ENHANCED CLEANSING: Apply same strict splitting for the export dataframe
-                        export_df['course'] = export_df['course'].apply(lambda x: str(x).split('(')[0].split(':')[0].strip())
+                        # 🚀 CHANGED: Clean the course format here for the Export Table as well
+                        export_df['course'] = export_df['course'].apply(lambda x: str(x).split('(')[0].strip() if '(' in str(x) else str(x))
                         
                         st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
