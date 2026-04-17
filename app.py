@@ -90,10 +90,13 @@ if attendance_raw:
 
 df_all = pd.DataFrame(all_records)
 if not df_all.empty:
-    # 🛠️ FIX 1: 强制将时间戳转为纯数字，兼容历史脏数据
-    df_all['timestamp'] = pd.to_numeric(df_all['timestamp'], errors='coerce')
+    # 🛠️ FIX: 智能时间降级机制 (Smart Time Fallback)
+    # 如果硬件漏传了 timestamp，系统会自动提取 Firebase 文件夹的 record_date 作为保底时间，完美消灭 Unknown Time！
+    df_all['timestamp'] = pd.to_numeric(df_all.get('timestamp'), errors='coerce')
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
-    df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('Unknown Time')
+    df_all['dt_obj'] = df_all['dt_obj'].fillna(pd.to_datetime(df_all['record_date'], errors='coerce'))
+    
+    df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_all = df_all.sort_values('dt_obj')
     
     df_all['status'] = df_all['status'].apply(lambda x: 'present' if 'check' in str(x).lower() else str(x))
@@ -132,9 +135,8 @@ def display_flow_emoji(f):
 # ==========================================================
 st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
-st.sidebar.markdown("---") # 分割线，让排版更干净
+st.sidebar.markdown("---")
 
-# 🛠️ FIX 3: 拆除空荡荡的外壳，按钮直接贴在 Sidebar 上
 next_mode = "Enrollment" if current_hw_mode == "Attendance" else "Attendance"
 if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_container_width=True):
     control_ref.update({"mode": next_mode})
@@ -322,7 +324,6 @@ if current_hw_mode == "Enrollment":
                 reg_df = reg_df[reg_df[['student_id', 'name', 'course']].apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)]
             reg_df = reg_df.reset_index(drop=True); reg_df.index += 1
             
-            # 🛠️ FIX 2: 统一美化 Master Registry 的表头显示
             reg_disp = reg_df.rename(columns={
                 'student_id': 'Student ID',
                 'name': 'Full Name',
@@ -379,7 +380,6 @@ else:
                     disp['status'] = disp['status'].apply(display_status_emoji); disp['flow_type'] = disp['flow_type'].apply(display_flow_emoji)
                     disp = disp.reset_index(drop=True); disp.index += 1
                     
-                    # 🛠️ FIX 2: 美化 Live Feed 的表头
                     disp = disp.rename(columns={
                         'formatted_time': 'Timestamp',
                         'name': 'Student Name',
@@ -520,11 +520,11 @@ else:
                         
                         if not day_records.empty:
                             day_records = day_records.copy()
+                            day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split('(')[0].split(':')[0].strip().upper())
                             day_unique = day_records.drop_duplicates(subset=['student_id'], keep='last')
                             
                             day_present = day_unique[day_unique['status'].astype(str).str.lower().isin(['present', 'late'])]
-                            fac_present = day_present.groupby('course').size().reset_index(name='Attended')
-                            fac_present.rename(columns={'course': 'Clean_Faculty'}, inplace=True)
+                            fac_present = day_present.groupby('Clean_Faculty').size().reset_index(name='Attended')
                         else:
                             fac_present = pd.DataFrame(columns=['Clean_Faculty', 'Attended'])
                         
@@ -600,7 +600,6 @@ else:
                     if not export_df.empty:
                         export_disp = export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False)
                         
-                        # 🛠️ FIX 2: 导出报表的表头同样美化
                         export_disp = export_disp.rename(columns={
                             'formatted_time': 'Timestamp',
                             'name': 'Student Name',
