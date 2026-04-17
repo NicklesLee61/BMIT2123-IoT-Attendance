@@ -8,16 +8,16 @@ import time
 import io
 
 # ==========================================================
-# 🚀 GLOBAL FACULTY LIST
+# 🚀 GLOBAL FACULTY LIST (Updated to Parenthesis Format)
 # ==========================================================
 FACULTIES = [
-    "FAFB: Faculty of Accountancy, Finance and Business",
-    "FOAS: Faculty of Applied Sciences",
-    "FOBE: Faculty of Built Environment",
-    "FCCI: Faculty of Communication and Creative Industries",
-    "FOCS: Faculty of Computing and Information Technology",
-    "FOET: Faculty of Engineering and Technology",
-    "FSSH: Faculty of Social Science and Humanities",
+    "FAFB (Faculty of Accountancy, Finance and Business)",
+    "FOAS (Faculty of Applied Sciences)",
+    "FOBE (Faculty of Built Environment)",
+    "FCCI (Faculty of Communication and Creative Industries)",
+    "FOCS (Faculty of Computing and Information Technology)",
+    "FOET (Faculty of Engineering and Technology)",
+    "FSSH (Faculty of Social Science and Humanities)",
     "Unknown / Other"
 ]
 
@@ -177,14 +177,15 @@ if current_hw_mode == "Enrollment":
                 elif n_id in students_data:
                     st.error(f"❌ **ID Conflict:** Student ID `{n_id}` already exists. Use the 'Update Student Details' tab instead.")
                 else:
-                    rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
-                    fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
+                    # 🚀 Enhanced Strict Uniqueness Check (strip spaces to prevent bypass)
+                    rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
+                    fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                     has_conflict = False
                     
                     if n_rfid and n_rfid in rfid_owners:
                         st.error(f"❌ **Hardware Conflict:** RFID UID `{n_rfid}` is already in use by {rfid_owners[n_rfid]}."); has_conflict = True
                     if n_fpid and n_fpid in fpid_owners:
-                        st.error(f"❌ **Hardware Conflict:** FP Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
+                        st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
 
                     if not has_conflict:
                         db.reference(f'/students/{n_id}').update({
@@ -251,14 +252,15 @@ if current_hw_mode == "Enrollment":
                         u_fpid = st.text_input(f"Fingerprint Token ({uf_status}):", value=display_fpid).strip()
 
                     if st.form_submit_button("Save Updates / Apply Re-bind"):
-                        rfid_owners = {v.get('card_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')) not in ['Unlinked', '', 'None']}
-                        fpid_owners = {v.get('fingerprint_id'): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')) not in ['Unlinked', '', 'None']}
+                        # 🚀 Enhanced Strict Uniqueness Check
+                        rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
+                        fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                         has_conflict = False
                         
                         if u_rfid and u_rfid in rfid_owners and rfid_owners[u_rfid] != u_sid:
                             st.error(f"❌ **Hardware Conflict:** RFID UID `{u_rfid}` belongs to {rfid_owners[u_rfid]}."); has_conflict = True
                         if u_fpid and u_fpid in fpid_owners and fpid_owners[u_fpid] != u_sid:
-                            st.error(f"❌ **Hardware Conflict:** FP Token `{u_fpid}` belongs to {fpid_owners[u_fpid]}."); has_conflict = True
+                            st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{u_fpid}` belongs to {fpid_owners[u_fpid]}."); has_conflict = True
 
                         if not has_conflict:
                             db.reference(f'/students/{u_sid}').update({
@@ -291,7 +293,8 @@ if current_hw_mode == "Enrollment":
             for sid, info in students_data.items():
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
                 raw_course = str(info.get('course', 'N/A'))
-                short_course = raw_course.split(':')[0].strip() if ':' in raw_course else raw_course
+                # 🚀 CHANGED: Split by parenthesis instead of colon
+                short_course = raw_course.split('(')[0].strip() if '(' in raw_course else raw_course
                 
                 master_registry.append({
                     "student_id": sid, 
@@ -472,7 +475,8 @@ else:
                     stu_list = []
                     for sid_reg, info_reg in students_data.items():
                         raw_c = info_reg.get('course', 'Unknown / Other')
-                        clean_c = str(raw_c).split(':')[0].strip().upper()
+                        # 🚀 CHANGED: Split by parenthesis instead of colon for charts
+                        clean_c = str(raw_c).split('(')[0].strip().upper()
                         stu_list.append({'student_id': sid_reg, 'Clean_Faculty': clean_c})
                     
                     df_stu = pd.DataFrame(stu_list)
@@ -484,7 +488,7 @@ else:
                         
                         if not day_records.empty:
                             day_records = day_records.copy()
-                            day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split(':')[0].strip().upper())
+                            day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split('(')[0].strip().upper())
                             day_unique = day_records.drop_duplicates(subset=['student_id'], keep='last')
                             
                             day_present = day_unique[day_unique['status'].astype(str).str.lower().isin(['present', 'late'])]
@@ -517,7 +521,6 @@ else:
                         st.bar_chart(chart_data, use_container_width=True)
                 st.write("<br>", unsafe_allow_html=True)
                 
-                # 🚀 CHANGED: Added Date and Specific Student Filters for Duration Analysis
                 with st.container(border=True):
                     st.subheader("⏱️ Stay Duration Analysis")
                     
@@ -563,7 +566,8 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        export_df['course'] = export_df['course'].apply(lambda x: str(x).split(':')[0].strip() if ':' in str(x) else str(x))
+                        # 🚀 CHANGED: Clean the course format here for the Export Table as well
+                        export_df['course'] = export_df['course'].apply(lambda x: str(x).split('(')[0].strip() if '(' in str(x) else str(x))
                         
                         st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
