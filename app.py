@@ -8,7 +8,7 @@ import time
 import io
 
 # ==========================================================
-# 🚀 GLOBAL FACULTY LIST (Updated to Parenthesis Format)
+# 🚀 GLOBAL FACULTY LIST
 # ==========================================================
 FACULTIES = [
     "FAFB (Faculty of Accountancy, Finance and Business)",
@@ -20,6 +20,18 @@ FACULTIES = [
     "FSSH (Faculty of Social Science and Humanities)",
     "Unknown / Other"
 ]
+
+# 🧠 SMART CLEANSING ENGINE: 强制统一所有历史脏数据
+def clean_course_name(c):
+    c_upper = str(c).upper()
+    if 'FAFB' in c_upper: return 'FAFB'
+    if 'FOAS' in c_upper: return 'FOAS'
+    if 'FOBE' in c_upper: return 'FOBE'
+    if 'FCCI' in c_upper or 'MUSIC' in c_upper: return 'FCCI'
+    if 'FOCS' in c_upper or 'COMPUTER' in c_upper: return 'FOCS'
+    if 'FOET' in c_upper: return 'FOET'
+    if 'FSSH' in c_upper: return 'FSSH'
+    return 'UNKNOWN / OTHER'
 
 # ==========================================================
 # 1. SYSTEM INITIALIZATION & SECURE CLOUD AUTHENTICATION
@@ -79,8 +91,13 @@ if attendance_raw:
 df_all = pd.DataFrame(all_records)
 if not df_all.empty:
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
-    df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    # 🛠️ FIX 1: 拦截硬件发送的 None 坏时间，替换为 Unknown Time
+    df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('Unknown Time')
     df_all = df_all.sort_values('dt_obj')
+    
+    # 🛠️ FIX 2: 拦截硬件发送的奇葩 Status (checked_in/out)，强制拨乱反正为 present
+    df_all['status'] = df_all['status'].apply(lambda x: 'present' if 'check' in str(x).lower() else str(x))
+    
     df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
     
     def determine_flow(row):
@@ -91,19 +108,20 @@ if not df_all.empty:
             
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
     
-    course_map = {k: v.get('course', 'Unknown / Other') for k, v in students_data.items()}
-    df_all['course'] = df_all['student_id'].map(course_map).fillna('Unknown / Other')
+    # 🛠️ FIX 3: 全局彻底清洗课程名称，一步到位
+    course_map = {k: clean_course_name(v.get('course', '')) for k, v in students_data.items()}
+    df_all['course'] = df_all['student_id'].map(course_map).fillna('UNKNOWN / OTHER')
 
 # ==========================================================
 # 🚀 GLOBAL UI HELPER: Emoji Formatters
 # ==========================================================
 def display_status_emoji(s):
     s_lower = str(s).lower()
-    if 'present' in s_lower: return f"🟢 {s}"
-    elif 'absent' in s_lower: return f"🔴 {s}"
-    elif 'late' in s_lower: return f"🟠 {s}"
-    elif 'leave' in s_lower: return f"🔵 {s}"
-    return s
+    if 'present' in s_lower: return f"🟢 {s.title()}"
+    elif 'absent' in s_lower: return f"🔴 {s.title()}"
+    elif 'late' in s_lower: return f"🟠 {s.title()}"
+    elif 'leave' in s_lower: return f"🔵 {s.title()}"
+    return s.title()
     
 def display_flow_emoji(f):
     if 'Check-in' in str(f): return f"🟢 {f}"
@@ -118,10 +136,9 @@ st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
 
 with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
-    target_mode = st.selectbox("Switch Mode:", ["Attendance", "Enrollment"], 
-                               index=0 if current_hw_mode == "Attendance" else 1)
-    if st.sidebar.button("Apply Mode Update"):
-        control_ref.update({"mode": target_mode})
+    next_mode = "Enrollment" if current_hw_mode == "Attendance" else "Attendance"
+    if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_container_width=True):
+        control_ref.update({"mode": next_mode})
         st.rerun()
 
 # ==========================================================
@@ -177,7 +194,6 @@ if current_hw_mode == "Enrollment":
                 elif n_id in students_data:
                     st.error(f"❌ **ID Conflict:** Student ID `{n_id}` already exists. Use the 'Update Student Details' tab instead.")
                 else:
-                    # 🚀 Enhanced Strict Uniqueness Check (strip spaces to prevent bypass)
                     rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                     fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                     has_conflict = False
@@ -252,7 +268,6 @@ if current_hw_mode == "Enrollment":
                         u_fpid = st.text_input(f"Fingerprint Token ({uf_status}):", value=display_fpid).strip()
 
                     if st.form_submit_button("Save Updates / Apply Re-bind"):
-                        # 🚀 Enhanced Strict Uniqueness Check
                         rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                         fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                         has_conflict = False
@@ -292,9 +307,8 @@ if current_hw_mode == "Enrollment":
             master_registry = []
             for sid, info in students_data.items():
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
-                raw_course = str(info.get('course', 'N/A'))
-                # 🚀 CHANGED: Split by parenthesis instead of colon
-                short_course = raw_course.split('(')[0].strip() if '(' in raw_course else raw_course
+                # 🛠️ FIX 4: 使用终极清洗器，无论历史多脏全部统一
+                short_course = clean_course_name(info.get('course', 'N/A'))
                 
                 master_registry.append({
                     "student_id": sid, 
@@ -383,7 +397,7 @@ else:
                             md = d1.date_input("Date:", datetime.now(), key="m_d")
                             mt = t1.time_input("Time:", dt_time(9, 0))
                             st.write("<br>", unsafe_allow_html=True)
-                            ms = st.selectbox("Status:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
+                            ms = st.selectbox("Status:", ["present", "absent", "late", "leave"], format_func=display_status_emoji)
                             st.write("<br>", unsafe_allow_html=True)
                             if st.form_submit_button("Force Sync New Record", type="primary"):
                                 m_sid = profile_mapping[m_disp]
@@ -416,7 +430,7 @@ else:
                         to_m = st.selectbox("Records Selector:", lbls.tolist(), label_visibility="collapsed")
                         row = f_df[lbls == to_m].iloc[0]
                         with st.expander("✏️ Update status for this entry", expanded=True):
-                            ns = st.selectbox("Change status to:", ["present", "absent", "late", "absent (Medical Leave)", "leave"], format_func=display_status_emoji)
+                            ns = st.selectbox("Change status to:", ["present", "absent", "late", "leave"], format_func=display_status_emoji)
                             if st.button("Submit Status Update", type="secondary"): 
                                 db.reference(f'/attendance/{row["firebase_path"]}').update({'status': ns, 'verification_method': "Admin_Manual_Update"})
                                 st.toast("✅ Record updated!")
@@ -438,11 +452,10 @@ else:
         
         if not df_all.empty:
             color_map = {
-                'present': '#2ecc71',
-                'absent': '#e74c3c',
-                'absent (Medical Leave)': '#e74c3c',
-                'late': '#f39c12',
-                'leave': '#3498db'
+                'Present': '#2ecc71',
+                'Absent': '#e74c3c',
+                'Late': '#f39c12',
+                'Leave': '#3498db'
             }
 
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
@@ -457,8 +470,11 @@ else:
                 with st.container(border=True):
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
+                    
                     s_c = df_all['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
+                    s_c['Status'] = s_c['Status'].astype(str).str.title()
+                    
                     fig_pie = px.pie(s_c, values="Count", names="Status", hole=0.45, color="Status", color_discrete_map=color_map)
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                     fig_pie.update_layout(showlegend=True, margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor="rgba(0,0,0,0)")
@@ -474,9 +490,7 @@ else:
                     
                     stu_list = []
                     for sid_reg, info_reg in students_data.items():
-                        raw_c = info_reg.get('course', 'Unknown / Other')
-                        # 🚀 CHANGED: Split by parenthesis instead of colon for charts
-                        clean_c = str(raw_c).split('(')[0].strip().upper()
+                        clean_c = clean_course_name(info_reg.get('course', ''))
                         stu_list.append({'student_id': sid_reg, 'Clean_Faculty': clean_c})
                     
                     df_stu = pd.DataFrame(stu_list)
@@ -488,11 +502,11 @@ else:
                         
                         if not day_records.empty:
                             day_records = day_records.copy()
-                            day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split('(')[0].strip().upper())
                             day_unique = day_records.drop_duplicates(subset=['student_id'], keep='last')
                             
                             day_present = day_unique[day_unique['status'].astype(str).str.lower().isin(['present', 'late'])]
-                            fac_present = day_present.groupby('Clean_Faculty').size().reset_index(name='Attended')
+                            fac_present = day_present.groupby('course').size().reset_index(name='Attended')
+                            fac_present.rename(columns={'course': 'Clean_Faculty'}, inplace=True)
                         else:
                             fac_present = pd.DataFrame(columns=['Clean_Faculty', 'Attended'])
                         
@@ -566,9 +580,6 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        # 🚀 CHANGED: Clean the course format here for the Export Table as well
-                        export_df['course'] = export_df['course'].apply(lambda x: str(x).split('(')[0].strip() if '(' in str(x) else str(x))
-                        
                         st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
                         
