@@ -90,8 +90,11 @@ if attendance_raw:
 
 df_all = pd.DataFrame(all_records)
 if not df_all.empty:
+    # 🛠️ FIX 1: Safety net in case Raspberry Pi doesn't send verification_method
+    if 'verification_method' not in df_all.columns:
+        df_all['verification_method'] = 'RFID + FP 2FA'
+        
     # 🛠️ FIX: 智能时间降级机制 (Smart Time Fallback)
-    # 如果硬件漏传了 timestamp，系统会自动提取 Firebase 文件夹的 record_date 作为保底时间，完美消灭 Unknown Time！
     df_all['timestamp'] = pd.to_numeric(df_all.get('timestamp'), errors='coerce')
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
     df_all['dt_obj'] = df_all['dt_obj'].fillna(pd.to_datetime(df_all['record_date'], errors='coerce'))
@@ -167,7 +170,9 @@ if current_hw_mode == "Enrollment":
             if st.button("🔄 Fetch Scanned Card", key="fetch_new", type="primary"):
                 st.rerun()
                 
-        if pending_reg:
+        hw_sync_active = False
+        if pending_reg and pending_reg.get('status') != 'ready_to_enroll':
+            hw_sync_active = True
             st.success(f"✅ Hardware scan captured! Ready to register.")
             r_status = "🟢 Fetched from Scanner"
             f_status = "🟢 Fetched from Scanner"
@@ -205,17 +210,31 @@ if current_hw_mode == "Enrollment":
                         st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
 
                     if not has_conflict:
+                        # 🛠️ FIX 2: Ensure student details are saved to WebApp's registry even in HW Sync Mode
                         db.reference(f'/students/{n_id}').update({
                             "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
                             "rfid": n_rfid if n_rfid else "Unlinked"
                         })
-                        db.reference('/cards').push().set({
-                            "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
-                            "card_id": n_rfid if n_rfid else "Unlinked",
-                            "fingerprint_id": n_fpid if n_fpid else "Unlinked"
-                        })
-                        if pending_reg: db.reference('/pending_registration').delete()
-                        st.success(f"Profile {n_name} ({n_id}) successfully created!"); time.sleep(1); st.rerun()
+                        
+                        if hw_sync_active:
+                            db.reference('/pending_registration').update({
+                                "status": "ready_to_enroll",
+                                "name": n_name,
+                                "student_id": n_id,
+                                "course": n_course,
+                                "rfid": n_rfid,
+                                "fp_id": n_fpid
+                            })
+                            st.success("✅ Details sent to Hardware! Waiting for Raspberry Pi to finalize...")
+                        else:
+                            db.reference('/cards').push().set({
+                                "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
+                                "card_id": n_rfid if n_rfid else "Unlinked",
+                                "fingerprint_id": n_fpid if n_fpid else "Unlinked"
+                            })
+                            st.success(f"Profile {n_name} ({n_id}) successfully created!")
+                            
+                        time.sleep(1); st.rerun()
 
     # ---------------------------------------------------------
     # TAB 2: UPDATE / RE-BIND 
@@ -368,10 +387,13 @@ else:
             if not view_df.empty:
                 latest = view_df.drop_duplicates(subset=['student_id'], keep='last')
                 k1, k2, k3, k4 = st.columns(4)
-                k1.metric("🟢 Present", len(latest[latest['status'] == 'present']))
+                
+                present_count = len(latest[latest['status'].isin(['present', 'checked_in'])])
+                k1.metric("🟢 Present / In", present_count)
                 k2.metric("🔴 Absent", len(latest[latest['status'].astype(str).str.contains('absent', case=False)]))
                 k3.metric("🟠 Late", len(latest[latest['status'] == 'late']))
-                k4.metric("🔵 Leave", len(latest[latest['status'] == 'leave']))
+                k4.metric("🔵 Leave / Out", len(latest[latest['status'].isin(['leave', 'checked_out'])]))
+                
                 st.write("---")
                 disp = view_df[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
                 if search_l: disp = disp[disp[['student_id', 'name']].apply(lambda row: row.astype(str).str.contains(search_l, case=False).any(), axis=1)]
@@ -523,7 +545,7 @@ else:
                             day_records['Clean_Faculty'] = day_records['course'].apply(lambda x: str(x).split('(')[0].split(':')[0].strip().upper())
                             day_unique = day_records.drop_duplicates(subset=['student_id'], keep='last')
                             
-                            day_present = day_unique[day_unique['status'].astype(str).str.lower().isin(['present', 'late'])]
+                            day_present = day_unique[day_unique['status'].astype(str).str.lower().isin(['present', 'late', 'checked_in'])]
                             fac_present = day_present.groupby('Clean_Faculty').size().reset_index(name='Attended')
                         else:
                             fac_present = pd.DataFrame(columns=['Clean_Faculty', 'Attended'])
@@ -598,7 +620,10 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        export_disp = export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False)
+                        # 🛠️ FIX 3: Safe column extraction to prevent KeyError on Export
+                        cols_to_show = ['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']
+                        existing_cols = [c for c in cols_to_show if c in export_df.columns]
+                        export_disp = export_df[existing_cols].sort_values('formatted_time', ascending=False)
                         
                         export_disp = export_disp.rename(columns={
                             'formatted_time': 'Timestamp',
