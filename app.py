@@ -118,10 +118,10 @@ st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
 
 with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
-    target_mode = st.selectbox("Switch Mode:", ["Attendance", "Enrollment"], 
-                               index=0 if current_hw_mode == "Attendance" else 1)
-    if st.sidebar.button("Apply Mode Update"):
-        control_ref.update({"mode": target_mode})
+    # 🚀 CHANGED: Dynamic One-Click Toggle Button
+    next_mode = "Enrollment" if current_hw_mode == "Attendance" else "Attendance"
+    if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_container_width=True):
+        control_ref.update({"mode": next_mode})
         st.rerun()
 
 # ==========================================================
@@ -177,7 +177,6 @@ if current_hw_mode == "Enrollment":
                 elif n_id in students_data:
                     st.error(f"❌ **ID Conflict:** Student ID `{n_id}` already exists. Use the 'Update Student Details' tab instead.")
                 else:
-                    # 🚀 Enhanced Strict Uniqueness Check (strip spaces to prevent bypass)
                     rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                     fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                     has_conflict = False
@@ -252,7 +251,6 @@ if current_hw_mode == "Enrollment":
                         u_fpid = st.text_input(f"Fingerprint Token ({uf_status}):", value=display_fpid).strip()
 
                     if st.form_submit_button("Save Updates / Apply Re-bind"):
-                        # 🚀 Enhanced Strict Uniqueness Check
                         rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                         fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                         has_conflict = False
@@ -293,7 +291,6 @@ if current_hw_mode == "Enrollment":
             for sid, info in students_data.items():
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
                 raw_course = str(info.get('course', 'N/A'))
-                # 🚀 CHANGED: Split by parenthesis instead of colon
                 short_course = raw_course.split('(')[0].strip() if '(' in raw_course else raw_course
                 
                 master_registry.append({
@@ -475,7 +472,6 @@ else:
                     stu_list = []
                     for sid_reg, info_reg in students_data.items():
                         raw_c = info_reg.get('course', 'Unknown / Other')
-                        # 🚀 CHANGED: Split by parenthesis instead of colon for charts
                         clean_c = str(raw_c).split('(')[0].strip().upper()
                         stu_list.append({'student_id': sid_reg, 'Clean_Faculty': clean_c})
                     
@@ -566,7 +562,6 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        # 🚀 CHANGED: Clean the course format here for the Export Table as well
                         export_df['course'] = export_df['course'].apply(lambda x: str(x).split('(')[0].strip() if '(' in str(x) else str(x))
                         
                         st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
