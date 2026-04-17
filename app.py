@@ -21,7 +21,7 @@ FACULTIES = [
     "Unknown / Other"
 ]
 
-# 🧠 SMART CLEANSING ENGINE: 强制统一所有历史脏数据
+# 🧠 SMART CLEANSING ENGINE
 def clean_course_name(c):
     c_upper = str(c).upper()
     if 'FAFB' in c_upper: return 'FAFB'
@@ -90,14 +90,13 @@ if attendance_raw:
 
 df_all = pd.DataFrame(all_records)
 if not df_all.empty:
+    # 🛠️ FIX 1: 强制将时间戳转为纯数字，兼容历史脏数据
+    df_all['timestamp'] = pd.to_numeric(df_all['timestamp'], errors='coerce')
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
-    # 🛠️ FIX 1: 拦截硬件发送的 None 坏时间，替换为 Unknown Time
     df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('Unknown Time')
     df_all = df_all.sort_values('dt_obj')
     
-    # 🛠️ FIX 2: 拦截硬件发送的奇葩 Status (checked_in/out)，强制拨乱反正为 present
     df_all['status'] = df_all['status'].apply(lambda x: 'present' if 'check' in str(x).lower() else str(x))
-    
     df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
     
     def determine_flow(row):
@@ -108,7 +107,6 @@ if not df_all.empty:
             
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
     
-    # 🛠️ FIX 3: 全局彻底清洗课程名称，一步到位
     course_map = {k: clean_course_name(v.get('course', '')) for k, v in students_data.items()}
     df_all['course'] = df_all['student_id'].map(course_map).fillna('UNKNOWN / OTHER')
 
@@ -134,12 +132,13 @@ def display_flow_emoji(f):
 # ==========================================================
 st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
+st.sidebar.markdown("---") # 分割线，让排版更干净
 
-with st.sidebar.expander("🛠️ Remote Operations", expanded=True):
-    next_mode = "Enrollment" if current_hw_mode == "Attendance" else "Attendance"
-    if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_container_width=True):
-        control_ref.update({"mode": next_mode})
-        st.rerun()
+# 🛠️ FIX 3: 拆除空荡荡的外壳，按钮直接贴在 Sidebar 上
+next_mode = "Enrollment" if current_hw_mode == "Attendance" else "Attendance"
+if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_container_width=True):
+    control_ref.update({"mode": next_mode})
+    st.rerun()
 
 # ==========================================================
 # 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
@@ -307,7 +306,6 @@ if current_hw_mode == "Enrollment":
             master_registry = []
             for sid, info in students_data.items():
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
-                # 🛠️ FIX 4: 使用终极清洗器，无论历史多脏全部统一
                 short_course = clean_course_name(info.get('course', 'N/A'))
                 
                 master_registry.append({
@@ -323,7 +321,16 @@ if current_hw_mode == "Enrollment":
             if search_query:
                 reg_df = reg_df[reg_df[['student_id', 'name', 'course']].apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)]
             reg_df = reg_df.reset_index(drop=True); reg_df.index += 1
-            st.dataframe(reg_df, use_container_width=True)
+            
+            # 🛠️ FIX 2: 统一美化 Master Registry 的表头显示
+            reg_disp = reg_df.rename(columns={
+                'student_id': 'Student ID',
+                'name': 'Full Name',
+                'course': 'Faculty',
+                'RFID_UID': 'RFID Tag',
+                'FP_ID': 'FP Slot'
+            })
+            st.dataframe(reg_disp, use_container_width=True)
             
             st.markdown("---")
             st.subheader("⚠️ Danger Zone: Remove Student")
@@ -371,6 +378,16 @@ else:
                 if not disp.empty:
                     disp['status'] = disp['status'].apply(display_status_emoji); disp['flow_type'] = disp['flow_type'].apply(display_flow_emoji)
                     disp = disp.reset_index(drop=True); disp.index += 1
+                    
+                    # 🛠️ FIX 2: 美化 Live Feed 的表头
+                    disp = disp.rename(columns={
+                        'formatted_time': 'Timestamp',
+                        'name': 'Student Name',
+                        'flow_type': 'Log Type',
+                        'status': 'Status',
+                        'student_id': 'Student ID',
+                        'verification_method': 'Verification'
+                    })
                     st.dataframe(disp, use_container_width=True)
                 else: st.warning(f"No matching records found for '{search_l}'.")
             else: st.info(f"No records for {sel_date.strftime('%Y-%m-%d')}.")
@@ -474,6 +491,7 @@ else:
                     s_c = df_all['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
                     s_c['Status'] = s_c['Status'].astype(str).str.title()
+                    s_c = s_c.groupby('Status', as_index=False).sum() 
                     
                     fig_pie = px.pie(s_c, values="Count", names="Status", hole=0.45, color="Status", color_discrete_map=color_map)
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
@@ -580,12 +598,25 @@ else:
                     st.write("---")
                     
                     if not export_df.empty:
-                        st.dataframe(export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False), height=300, use_container_width=True)
+                        export_disp = export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].sort_values('formatted_time', ascending=False)
+                        
+                        # 🛠️ FIX 2: 导出报表的表头同样美化
+                        export_disp = export_disp.rename(columns={
+                            'formatted_time': 'Timestamp',
+                            'name': 'Student Name',
+                            'student_id': 'Student ID',
+                            'course': 'Faculty',
+                            'status': 'Status',
+                            'flow_type': 'Log Type',
+                            'verification_method': 'Verification'
+                        })
+                        
+                        st.dataframe(export_disp, height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
                         
                         buf = io.BytesIO()
                         with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
-                            export_df[['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']].to_excel(wr, index=False)
+                            export_disp.to_excel(wr, index=False)
                         
                         file_suffix = "All_Time" if export_filter == "All Time (Full History)" else export_date.strftime("%Y%m%d")
                         file_name = f"Smart_Campus_Report_{file_suffix}.xlsx"
