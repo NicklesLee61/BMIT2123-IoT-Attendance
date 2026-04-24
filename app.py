@@ -140,9 +140,9 @@ if students_data and all_records:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        # 🚀 FIX: 完美统一，全用 leave。Duration 靠 verification_method 过滤！
-                        'status': 'leave', 
-                        'verification_method': 'System Auto-Generated',
+                        # 🚀 FIX: 状态保持 Present，只用 Verification 标记它是自动生成的！绝不干扰正常出勤！
+                        'status': 'present', 
+                        'verification_method': 'System Auto-Checkout',
                         'firebase_path': f"auto_checkout/{d_str}/{sid}"
                     })
 
@@ -159,12 +159,26 @@ if not df_all.empty:
     df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_all = df_all.sort_values('dt_obj')
     
-    df_all['status'] = df_all['status'].apply(lambda x: 'present' if 'check' in str(x).lower() else str(x))
+    # 🚀 FIX: 终极历史数据清洗器！强制把以前那些带括号的测试数据洗回最干净的 4 种状态！
+    def force_clean_status(row):
+        s_low = str(row.get('status', '')).lower()
+        vm_low = str(row.get('verification_method', '')).lower()
+        if 'absent' in s_low: return 'absent'
+        if 'auto-closed' in s_low or 'auto checkout' in vm_low or 'auto-checkout' in vm_low: return 'present'
+        if 'present' in s_low or 'check' in s_low: return 'present'
+        if 'late' in s_low: return 'late'
+        if 'leave' in s_low: return 'leave'
+        return s_low
+        
+    df_all['status'] = df_all.apply(force_clean_status, axis=1)
     df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
     
     def determine_flow(row):
         stat = str(row.get('status', '')).lower()
+        vm = str(row.get('verification_method', '')).lower()
         if 'absent' in stat: return "--"
+        # 🚀 FIX: 精准识别自动签退，UI 动作显示为 Check-out (Auto)
+        if 'auto-checkout' in vm: return "Check-out (Auto)"
         if stat == 'leave': return "Check-out (Early)"
         return "Check-in" if row['tap_rank'] % 2 != 0 else "Check-out"
             
@@ -177,18 +191,17 @@ if not df_all.empty:
 # 🚀 GLOBAL UI HELPER: Emoji Formatters
 # ==========================================================
 def display_status_emoji(s):
-    s_str = str(s)
-    s_lower = s_str.lower()
-    if 'present' in s_lower: return f"🟢 {s_str.title()}"
-    elif 'absent' in s_lower: return f"🔴 {s_str.title()}"
-    elif 'late' in s_lower: return f"🟠 {s_str.title()}"
-    elif 'leave' in s_lower: return f"🔵 {s_str.title()}"
-    return s_str.title()
+    s_low = str(s).lower()
+    if 'present' in s_low: return "🟢 Present"
+    if 'absent' in s_low: return "🔴 Absent"
+    if 'late' in s_low: return "🟠 Late"
+    if 'leave' in s_low: return "🔵 Leave"
+    return str(s).title()
     
 def display_flow_emoji(f):
     if 'Check-in' in str(f): return f"🟢 {f}"
-    elif 'Check-out' in str(f): return f"🔵 {f}"
-    elif f == '--': return f"⚪ {f}"
+    if 'Check-out' in str(f): return f"🔵 {f}"
+    if f == '--': return f"⚪ {f}"
     return f
 
 # ==========================================================
@@ -468,12 +481,11 @@ else:
                 latest = view_df.drop_duplicates(subset=['student_id'], keep='last')
                 k1, k2, k3, k4 = st.columns(4)
                 
-                present_count = len(latest[latest['status'].isin(['present', 'checked_in'])])
+                present_count = len(latest[latest['status'] == 'present'])
                 k1.metric("🟢 Present / In", present_count)
-                k2.metric("🔴 Absent", len(latest[latest['status'].astype(str).str.contains('absent', case=False)]))
+                k2.metric("🔴 Absent", len(latest[latest['status'] == 'absent']))
                 k3.metric("🟠 Late", len(latest[latest['status'] == 'late']))
-                # 🚀 FIX: 顶部面板同样完美统一
-                k4.metric("🔵 Leave / Out", len(latest[latest['status'].isin(['leave', 'checked_out'])]))
+                k4.metric("🔵 Leave / Out", len(latest[latest['status'] == 'leave']))
                 
                 st.write("---")
                 
@@ -578,6 +590,7 @@ else:
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
+            # 🚀 极其纯净的四原色配置
             color_map = {
                 'Present': '#2ecc71',
                 'Absent': '#e74c3c',
@@ -602,8 +615,6 @@ else:
                     
                     s_c = pie_final_status['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
-                    
-                    # 🚀 FIX: 完美的统一化 .title()，让饼图干干净净只有四种状态！
                     s_c['Status'] = s_c['Status'].astype(str).str.title()
                     
                     s_c = s_c.groupby('Status', as_index=False).sum() 
@@ -689,7 +700,6 @@ else:
                         if not filtered_status.empty:
                             daily_trend = filtered_status.groupby(['record_date', 'status']).size().reset_index(name='Count')
                             
-                            # 🚀 FIX: 完美的统一化，干干净净只有四色！
                             daily_trend['status'] = daily_trend['status'].astype(str).str.title()
                             
                             fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
@@ -717,10 +727,10 @@ else:
                     
                     dur_data = []
                     
-                    # 🚀 FIX: 利用 verification_method 作废自动记录的停留时长，数学逻辑满分！
+                    # 🚀 FIX: 利用 verification_method 作废自动记录的停留时长，不会被历史数据弄乱
                     valid_df = df_all[
-                        (~df_all['status'].astype(str).str.contains('absent', case=False, na=False)) & 
-                        (~df_all['verification_method'].astype(str).str.contains('System Auto-Generated', case=False, na=False))
+                        (df_all['status'] != 'absent') & 
+                        (~df_all['verification_method'].astype(str).str.contains('System Auto', case=False, na=False))
                     ]
                     
                     target_sids = students_data.keys() if dur_stu == "-- All Students --" else [profile_mapping[dur_stu]]
