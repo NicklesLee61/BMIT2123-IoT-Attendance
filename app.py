@@ -90,11 +90,9 @@ if attendance_raw:
 
 df_all = pd.DataFrame(all_records)
 if not df_all.empty:
-    # 🛠️ FIX 1: Safety net in case Raspberry Pi doesn't send verification_method
     if 'verification_method' not in df_all.columns:
         df_all['verification_method'] = 'RFID + FP 2FA'
         
-    # 🛠️ FIX: 智能时间降级机制 (Smart Time Fallback)
     df_all['timestamp'] = pd.to_numeric(df_all.get('timestamp'), errors='coerce')
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
     df_all['dt_obj'] = df_all['dt_obj'].fillna(pd.to_datetime(df_all['record_date'], errors='coerce'))
@@ -210,7 +208,6 @@ if current_hw_mode == "Enrollment":
                         st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
 
                     if not has_conflict:
-                        # 🛠️ FIX 2: Ensure student details are saved to WebApp's registry even in HW Sync Mode
                         db.reference(f'/students/{n_id}').update({
                             "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
                             "rfid": n_rfid if n_rfid else "Unlinked"
@@ -380,10 +377,18 @@ else:
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
         if not df_all.empty:
-            c1, c2 = st.columns(2)
+            # 🚀 ADDED FACULTY FILTER HERE
+            c1, c2, c3 = st.columns([1, 1.5, 1.5])
             with c1: sel_date = st.date_input("📅 Date:", datetime.now(), key="l_date")
-            with c2: search_l = st.text_input("🔍 Search Record (by ID or Name):", key="l_search")
+            with c2: fac_filter = st.selectbox("🎓 Filter by Faculty:", ["-- All Faculties --"] + FACULTIES, key="l_fac")
+            with c3: search_l = st.text_input("🔍 Search Record (by ID/Name):", key="l_search")
+            
             view_df = df_all[df_all['record_date'] == sel_date.strftime("%Y-%m-%d")]
+            
+            # 🚀 APPLY FACULTY FILTER LOGIC
+            if fac_filter != "-- All Faculties --":
+                view_df = view_df[view_df['course'] == fac_filter]
+
             if not view_df.empty:
                 latest = view_df.drop_duplicates(subset=['student_id'], keep='last')
                 k1, k2, k3, k4 = st.columns(4)
@@ -395,7 +400,10 @@ else:
                 k4.metric("🔵 Leave / Out", len(latest[latest['status'].isin(['leave', 'checked_out'])]))
                 
                 st.write("---")
-                disp = view_df[['formatted_time', 'name', 'flow_type', 'status', 'student_id', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
+                
+                # Added 'course' to the display so the teacher can see the faculty column!
+                disp = view_df[['formatted_time', 'name', 'student_id', 'course', 'flow_type', 'status', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
+                
                 if search_l: disp = disp[disp[['student_id', 'name']].apply(lambda row: row.astype(str).str.contains(search_l, case=False).any(), axis=1)]
                 
                 if not disp.empty:
@@ -405,14 +413,19 @@ else:
                     disp = disp.rename(columns={
                         'formatted_time': 'Timestamp',
                         'name': 'Student Name',
+                        'student_id': 'Student ID',
+                        'course': 'Faculty',
                         'flow_type': 'Log Type',
                         'status': 'Status',
-                        'student_id': 'Student ID',
                         'verification_method': 'Verification'
                     })
                     st.dataframe(disp, use_container_width=True)
                 else: st.warning(f"No matching records found for '{search_l}'.")
-            else: st.info(f"No records for {sel_date.strftime('%Y-%m-%d')}.")
+            else: 
+                if fac_filter != "-- All Faculties --":
+                    st.info(f"No records found for {fac_filter} on {sel_date.strftime('%Y-%m-%d')}.")
+                else:
+                    st.info(f"No records for {sel_date.strftime('%Y-%m-%d')}.")
         else: st.info("Waiting for hardware synchronization...")
 
     with tab_console:
@@ -611,16 +624,24 @@ else:
                     
                     export_filter = st.radio("Select Export Range:", ["All Time (Full History)", "Specific Date"], horizontal=True)
                     
+                    # 🚀 ADDED FACULTY FILTER FOR EXPORT HERE TOO
+                    ex_c1, ex_c2 = st.columns(2)
+                    
                     if export_filter == "Specific Date":
-                        export_date = st.date_input("Select Date to Export:", datetime.now(), key="export_date_input")
+                        with ex_c1: export_date = st.date_input("Select Date to Export:", datetime.now(), key="export_date_input")
                         export_df = df_all[df_all['record_date'] == export_date.strftime("%Y-%m-%d")]
+                        with ex_c2: export_fac = st.selectbox("Filter by Faculty (Export):", ["-- All Faculties --"] + FACULTIES, key="ex_fac")
                     else:
                         export_df = df_all.copy()
+                        with ex_c1: export_fac = st.selectbox("Filter by Faculty (Export):", ["-- All Faculties --"] + FACULTIES, key="ex_fac")
                     
+                    # 🚀 APPLY FACULTY EXPORT LOGIC
+                    if export_fac != "-- All Faculties --":
+                        export_df = export_df[export_df['course'] == export_fac]
+                        
                     st.write("---")
                     
                     if not export_df.empty:
-                        # 🛠️ FIX 3: Safe column extraction to prevent KeyError on Export
                         cols_to_show = ['formatted_time', 'name', 'student_id', 'course', 'status', 'flow_type', 'verification_method']
                         existing_cols = [c for c in cols_to_show if c in export_df.columns]
                         export_disp = export_df[existing_cols].sort_values('formatted_time', ascending=False)
@@ -651,3 +672,4 @@ else:
                         
         else: 
             st.warning("⚠️ No analytics available yet. Synchronize hardware logs first.")
+
