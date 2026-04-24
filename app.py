@@ -90,9 +90,11 @@ if attendance_raw:
 
 df_all = pd.DataFrame(all_records)
 if not df_all.empty:
+    # 🛠️ FIX 1: Safety net in case Raspberry Pi doesn't send verification_method
     if 'verification_method' not in df_all.columns:
         df_all['verification_method'] = 'RFID + FP 2FA'
         
+    # 🛠️ FIX: 智能时间降级机制 (Smart Time Fallback)
     df_all['timestamp'] = pd.to_numeric(df_all.get('timestamp'), errors='coerce')
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
     df_all['dt_obj'] = df_all['dt_obj'].fillna(pd.to_datetime(df_all['record_date'], errors='coerce'))
@@ -208,6 +210,7 @@ if current_hw_mode == "Enrollment":
                         st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
 
                     if not has_conflict:
+                        # 🛠️ FIX 2: Ensure student details are saved to WebApp's registry even in HW Sync Mode
                         db.reference(f'/students/{n_id}').update({
                             "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
                             "rfid": n_rfid if n_rfid else "Unlinked"
@@ -385,9 +388,9 @@ else:
             
             view_df = df_all[df_all['record_date'] == sel_date.strftime("%Y-%m-%d")]
             
-            # 🚀 APPLY FACULTY FILTER LOGIC
+            # 🚀 BUG FIX: USE clean_course_name TO MATCH DATABASE SHORT CODES
             if fac_filter != "-- All Faculties --":
-                view_df = view_df[view_df['course'] == fac_filter]
+                view_df = view_df[view_df['course'] == clean_course_name(fac_filter)]
 
             if not view_df.empty:
                 latest = view_df.drop_duplicates(subset=['student_id'], keep='last')
@@ -635,9 +638,9 @@ else:
                         export_df = df_all.copy()
                         with ex_c1: export_fac = st.selectbox("Filter by Faculty (Export):", ["-- All Faculties --"] + FACULTIES, key="ex_fac")
                     
-                    # 🚀 APPLY FACULTY EXPORT LOGIC
+                    # 🚀 BUG FIX: USE clean_course_name TO MATCH DATABASE SHORT CODES
                     if export_fac != "-- All Faculties --":
-                        export_df = export_df[export_df['course'] == export_fac]
+                        export_df = export_df[export_df['course'] == clean_course_name(export_fac)]
                         
                     st.write("---")
                     
@@ -672,4 +675,3 @@ else:
                         
         else: 
             st.warning("⚠️ No analytics available yet. Synchronize hardware logs first.")
-
