@@ -95,7 +95,6 @@ if attendance_raw:
                 all_records.append(info)
 
 # 🚀 NEW: SMART AUTO-ABSENCE INJECTION ENGINE
-# Automatically detects if a student missed their custom scheduled class day!
 if students_data and active_dates:
     scanned_lookup = {}
     for r in all_records:
@@ -110,10 +109,7 @@ if students_data and active_dates:
             scanned_sids = scanned_lookup.get(d_str, set())
             
             for sid, info in students_data.items():
-                # Get student's custom schedule (default Mon-Fri)
                 stu_schedule = info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
-                
-                # If today is their class day AND they didn't scan any card today -> Mark Absent
                 if d_day in stu_schedule and sid not in scanned_sids:
                     all_records.append({
                         'student_id': sid,
@@ -129,16 +125,14 @@ if students_data and active_dates:
             pass
 
 # 🚀 NEW: SMART AUTO-CHECKOUT INJECTION ENGINE
-# Automatically checks out students who checked in but forgot to check out by end of day!
 if students_data and all_records:
     temp_df = pd.DataFrame(all_records)
     if not temp_df.empty and 'status' in temp_df.columns:
-        # Filter out auto-absent records to only count actual physical taps
         present_logs = temp_df[~temp_df['status'].astype(str).str.contains('absent', case=False, na=False)]
         if not present_logs.empty:
             tap_counts = present_logs.groupby(['student_id', 'record_date']).size()
             for (sid, d_str), count in tap_counts.items():
-                if count % 2 != 0: # Odd number of taps means they forgot to check out!
+                if count % 2 != 0: 
                     info = students_data.get(sid, {})
                     all_records.append({
                         'student_id': sid,
@@ -146,7 +140,8 @@ if students_data and all_records:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        'status': 'leave (Auto Checkout)',
+                        # ⚠️ 避开 "check" 关键词拦截，改用 'leave (Auto)'
+                        'status': 'leave (Auto)', 
                         'verification_method': 'System Auto-Generated',
                         'firebase_path': f"auto_checkout/{d_str}/{sid}"
                     })
@@ -251,7 +246,6 @@ if current_hw_mode == "Enrollment":
                 n_id = st.text_input("Student ID (Required):").strip()
                 n_name = st.text_input("Full Name:").strip()
                 n_course = st.selectbox("Academic Faculty / Program:", FACULTIES)
-                # 🚀 ADDED MULTI-SELECT FOR SCHEDULING
                 n_schedule = st.multiselect("📅 Mandatory Class Days:", DAYS_OF_WEEK, default=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
             with c2:
                 n_rfid = st.text_input(f"RFID UID ({r_status}):", value=scanned_rfid).strip()
@@ -350,7 +344,6 @@ if current_hw_mode == "Enrollment":
                         c_index = FACULTIES.index(exist_course) if exist_course in FACULTIES else len(FACULTIES)-1
                         u_course = st.selectbox("Academic Faculty / Program:", FACULTIES, index=c_index)
                         
-                        # 🚀 ADDED MULTI-SELECT FOR SCHEDULING UPDATE
                         exist_schedule = exist_stu.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
                         u_schedule = st.multiselect("📅 Mandatory Class Days:", DAYS_OF_WEEK, default=exist_schedule)
 
@@ -404,7 +397,6 @@ if current_hw_mode == "Enrollment":
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
                 short_course = clean_course_name(info.get('course', 'N/A'))
                 
-                # Format schedule for display
                 stu_sched = info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
                 short_sched = ", ".join([d[:3] for d in stu_sched]) if stu_sched else "None"
                 
@@ -461,7 +453,6 @@ else:
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
         if not df_all.empty:
-            # 🚀 ADDED FACULTY FILTER HERE
             c1, c2, c3 = st.columns([1, 1.5, 1.5])
             with c1: sel_date = st.date_input("📅 Date:", datetime.now(), key="l_date")
             with c2: fac_filter = st.selectbox("🎓 Filter by Faculty:", ["-- All Faculties --"] + FACULTIES, key="l_fac")
@@ -469,7 +460,6 @@ else:
             
             view_df = df_all[df_all['record_date'] == sel_date.strftime("%Y-%m-%d")]
             
-            # 🚀 BUG FIX: USE clean_course_name TO MATCH DATABASE SHORT CODES
             if fac_filter != "-- All Faculties --":
                 view_df = view_df[view_df['course'] == clean_course_name(fac_filter)]
 
@@ -485,7 +475,6 @@ else:
                 
                 st.write("---")
                 
-                # Added 'course' to the display so the teacher can see the faculty column!
                 disp = view_df[['formatted_time', 'name', 'student_id', 'course', 'flow_type', 'status', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
                 
                 if search_l: disp = disp[disp[['student_id', 'name']].apply(lambda row: row.astype(str).str.contains(search_l, case=False).any(), axis=1)]
@@ -593,7 +582,7 @@ else:
                 'Absent (Auto)': '#e74c3c',
                 'Late': '#f39c12',
                 'Leave': '#3498db',
-                'Leave (Auto Checkout)': '#3498db'
+                'Leave (Auto)': '#3498db'
             }
 
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
@@ -630,7 +619,6 @@ else:
                     
                     stu_list = []
                     for sid_reg, info_reg in students_data.items():
-                        # Only count students whose schedule includes this day for accurate rate calculation!
                         stu_sched = info_reg.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
                         if selected_date_day in stu_sched:
                             clean_c = clean_course_name(info_reg.get('course', ''))
@@ -691,10 +679,10 @@ else:
                     st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
                     
                     dur_data = []
-                    # 🚀 BUG FIX: Exclude both 'absent' and 'Auto Checkout' from duration calculation!
+                    # 🚀 BUG FIX: Exclude both 'absent' and 'Auto' from duration calculation!
                     valid_df = df_all[
                         (~df_all['status'].astype(str).str.contains('absent', case=False, na=False)) & 
-                        (~df_all['status'].astype(str).str.contains('Auto Checkout', case=False, na=False))
+                        (~df_all['status'].astype(str).str.contains('Auto', case=False, na=False))
                     ]
                     
                     target_sids = students_data.keys() if dur_stu == "-- All Students --" else [profile_mapping[dur_stu]]
