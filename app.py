@@ -691,7 +691,11 @@ else:
                     st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
                     
                     dur_data = []
-                    valid_df = df_all[~df_all['status'].astype(str).str.contains('absent', case=False, na=False)]
+                    # 🚀 BUG FIX: Exclude both 'absent' and 'Auto Checkout' from duration calculation!
+                    valid_df = df_all[
+                        (~df_all['status'].astype(str).str.contains('absent', case=False, na=False)) & 
+                        (~df_all['status'].astype(str).str.contains('Auto Checkout', case=False, na=False))
+                    ]
                     
                     target_sids = students_data.keys() if dur_stu == "-- All Students --" else [profile_mapping[dur_stu]]
                     
@@ -705,7 +709,7 @@ else:
                         dur_df = pd.DataFrame(dur_data)
                         st.bar_chart(dur_df.set_index('ID'), use_container_width=True)
                     else: 
-                        st.info(f"💡 Insufficient data for {dur_date_str} (Requires both Check-in and Check-out logs).")
+                        st.info(f"💡 Insufficient valid check-in/check-out logs for {dur_date_str} to calculate duration.")
 
             with sub_tab3:
                 with st.container(border=True):
