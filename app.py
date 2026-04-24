@@ -140,7 +140,6 @@ if students_data and all_records:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        # 🚀 FIX: 状态保持 Present，只用 Verification 标记它是自动生成的！绝不干扰正常出勤！
                         'status': 'present', 
                         'verification_method': 'System Auto-Checkout',
                         'firebase_path': f"auto_checkout/{d_str}/{sid}"
@@ -159,7 +158,6 @@ if not df_all.empty:
     df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_all = df_all.sort_values('dt_obj')
     
-    # 🚀 FIX: 终极历史数据清洗器！强制把以前那些带括号的测试数据洗回最干净的 4 种状态！
     def force_clean_status(row):
         s_low = str(row.get('status', '')).lower()
         vm_low = str(row.get('verification_method', '')).lower()
@@ -177,7 +175,6 @@ if not df_all.empty:
         stat = str(row.get('status', '')).lower()
         vm = str(row.get('verification_method', '')).lower()
         if 'absent' in stat: return "--"
-        # 🚀 FIX: 精准识别自动签退，UI 动作显示为 Check-out (Auto)
         if 'auto-checkout' in vm: return "Check-out (Auto)"
         if stat == 'leave': return "Check-out (Early)"
         return "Check-in" if row['tap_rank'] % 2 != 0 else "Check-out"
@@ -590,7 +587,6 @@ else:
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
-            # 🚀 极其纯净的四原色配置
             color_map = {
                 'Present': '#2ecc71',
                 'Absent': '#e74c3c',
@@ -688,7 +684,10 @@ else:
                         min_date = pd.to_datetime(daily_final_status['record_date']).min().date()
                         max_date = pd.to_datetime(daily_final_status['record_date']).max().date()
                         
-                        trend_dates = st.date_input("🗓️ Filter Trend by Date Range:", [min_date, max_date], key="trend_date_picker")
+                        # 🚀 FIX: 默认只框选最近 7 天，不再挤成一团！
+                        default_start = max(min_date, (pd.to_datetime(max_date) - pd.Timedelta(days=6)).date())
+                        
+                        trend_dates = st.date_input("🗓️ Filter Trend by Date Range:", [default_start, max_date], key="trend_date_picker")
                         
                         if len(trend_dates) == 2:
                             start_d, end_d = trend_dates
@@ -699,12 +698,15 @@ else:
                             
                         if not filtered_status.empty:
                             daily_trend = filtered_status.groupby(['record_date', 'status']).size().reset_index(name='Count')
-                            
                             daily_trend['status'] = daily_trend['status'].astype(str).str.title()
                             
                             fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
-                                               color_discrete_map=color_map)
-                            fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)")
+                                               color_discrete_map=color_map, text='Count') # 增加数值显示
+                            
+                            # 🚀 FIX: X 轴强制按类别显示，消灭恼人的“无数据空档期”缝隙！
+                            fig_trend.update_xaxes(type='category', categoryorder='category ascending')
+                            fig_trend.update_traces(textposition='inside')
+                            fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.3)
                             st.plotly_chart(fig_trend, use_container_width=True)
                         else:
                             st.warning("⚠️ No data available in the selected date range.")
@@ -726,8 +728,6 @@ else:
                     st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
                     
                     dur_data = []
-                    
-                    # 🚀 FIX: 利用 verification_method 作废自动记录的停留时长，不会被历史数据弄乱
                     valid_df = df_all[
                         (df_all['status'] != 'absent') & 
                         (~df_all['verification_method'].astype(str).str.contains('System Auto', case=False, na=False))
