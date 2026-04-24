@@ -642,7 +642,6 @@ else:
                         
                         fac_rate = pd.merge(fac_totals, fac_present, on='Clean_Faculty', how='left').fillna(0)
                         
-                        # 🚀 FIX 1: Remove empty faculties (0%) from chart
                         fac_rate = fac_rate[fac_rate['Total_Enrolled'] > 0]
                         
                         if not fac_rate.empty:
@@ -666,27 +665,41 @@ else:
                     st.subheader("📈 Daily Attendance Trend")
                     st.caption("Tracking daily attendance variations over time")
                     
-                    # 🚀 FIX 2: Only grab the FINAL status per student per day to stop chart duplication stacking
                     daily_final_status = df_all.sort_values('dt_obj').drop_duplicates(subset=['record_date', 'student_id'], keep='last')
                     
                     if not daily_final_status.empty:
-                        daily_trend = daily_final_status.groupby(['record_date', 'status']).size().reset_index(name='Count')
+                        # 🚀 NEW: DATE RANGE FILTER FOR TREND CHART
+                        min_date = pd.to_datetime(daily_final_status['record_date']).min().date()
+                        max_date = pd.to_datetime(daily_final_status['record_date']).max().date()
                         
-                        # 🚀 FIX 3: Apply consistent color mapping for trends
-                        daily_trend['status'] = daily_trend['status'].astype(str).str.title()
-                        trend_color_map = {
-                            'Present': '#2ecc71',
-                            'Absent': '#e74c3c',
-                            'Absent (Auto)': '#e74c3c',
-                            'Late': '#f39c12',
-                            'Leave': '#3498db',
-                            '⚠️ Auto-Closed': '#95a5a6'
-                        }
+                        trend_dates = st.date_input("🗓️ Filter Trend by Date Range:", [min_date, max_date], key="trend_date_picker")
                         
-                        fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
-                                           color_discrete_map=trend_color_map)
-                        fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)")
-                        st.plotly_chart(fig_trend, use_container_width=True)
+                        if len(trend_dates) == 2:
+                            start_d, end_d = trend_dates
+                            mask = (pd.to_datetime(daily_final_status['record_date']).dt.date >= start_d) & (pd.to_datetime(daily_final_status['record_date']).dt.date <= end_d)
+                            filtered_status = daily_final_status[mask]
+                        else:
+                            filtered_status = daily_final_status
+                            
+                        if not filtered_status.empty:
+                            daily_trend = filtered_status.groupby(['record_date', 'status']).size().reset_index(name='Count')
+                            
+                            daily_trend['status'] = daily_trend['status'].astype(str).str.title()
+                            trend_color_map = {
+                                'Present': '#2ecc71',
+                                'Absent': '#e74c3c',
+                                'Absent (Auto)': '#e74c3c',
+                                'Late': '#f39c12',
+                                'Leave': '#3498db',
+                                '⚠️ Auto-Closed': '#95a5a6'
+                            }
+                            
+                            fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
+                                               color_discrete_map=trend_color_map)
+                            fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(fig_trend, use_container_width=True)
+                        else:
+                            st.warning("⚠️ No data available in the selected date range.")
                     else:
                         st.info("No trend data available.")
                         
