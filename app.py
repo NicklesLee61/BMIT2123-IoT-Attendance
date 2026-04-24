@@ -120,13 +120,36 @@ if students_data and active_dates:
                         'name': info.get('name', 'Unknown'),
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
-                        'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
+                        'timestamp': int(datetime.strptime(f"{d_str} 23:59:58", "%Y-%m-%d %H:%M:%S").timestamp()),
                         'status': 'absent (Auto)',
                         'verification_method': 'System Auto-Generated',
                         'firebase_path': f"auto_generated/{d_str}/{sid}"
                     })
         except Exception:
             pass
+
+# 🚀 NEW: SMART AUTO-CHECKOUT INJECTION ENGINE
+# Automatically checks out students who checked in but forgot to check out by end of day!
+if students_data and all_records:
+    temp_df = pd.DataFrame(all_records)
+    if not temp_df.empty and 'status' in temp_df.columns:
+        # Filter out auto-absent records to only count actual physical taps
+        present_logs = temp_df[~temp_df['status'].astype(str).str.contains('absent', case=False, na=False)]
+        if not present_logs.empty:
+            tap_counts = present_logs.groupby(['student_id', 'record_date']).size()
+            for (sid, d_str), count in tap_counts.items():
+                if count % 2 != 0: # Odd number of taps means they forgot to check out!
+                    info = students_data.get(sid, {})
+                    all_records.append({
+                        'student_id': sid,
+                        'name': info.get('name', 'Unknown'),
+                        'course': info.get('course', 'Unknown / Other'),
+                        'record_date': d_str,
+                        'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
+                        'status': 'leave (Auto Checkout)',
+                        'verification_method': 'System Auto-Generated',
+                        'firebase_path': f"auto_checkout/{d_str}/{sid}"
+                    })
 
 df_all = pd.DataFrame(all_records)
 
@@ -569,7 +592,8 @@ else:
                 'Absent': '#e74c3c',
                 'Absent (Auto)': '#e74c3c',
                 'Late': '#f39c12',
-                'Leave': '#3498db'
+                'Leave': '#3498db',
+                'Leave (Auto Checkout)': '#3498db'
             }
 
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
