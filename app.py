@@ -438,6 +438,7 @@ else:
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
         if not df_all.empty:
+            # 🚀 ADDED FACULTY FILTER HERE
             c1, c2, c3 = st.columns([1, 1.5, 1.5])
             with c1: sel_date = st.date_input("📅 Date:", datetime.now(), key="l_date")
             with c2: fac_filter = st.selectbox("🎓 Filter by Faculty:", ["-- All Faculties --"] + FACULTIES, key="l_fac")
@@ -445,6 +446,7 @@ else:
             
             view_df = df_all[df_all['record_date'] == sel_date.strftime("%Y-%m-%d")]
             
+            # 🚀 BUG FIX: USE clean_course_name TO MATCH DATABASE SHORT CODES
             if fac_filter != "-- All Faculties --":
                 view_df = view_df[view_df['course'] == clean_course_name(fac_filter)]
 
@@ -460,6 +462,7 @@ else:
                 
                 st.write("---")
                 
+                # Added 'course' to the display so the teacher can see the faculty column!
                 disp = view_df[['formatted_time', 'name', 'student_id', 'course', 'flow_type', 'status', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
                 
                 if search_l: disp = disp[disp[['student_id', 'name']].apply(lambda row: row.astype(str).str.contains(search_l, case=False).any(), axis=1)]
