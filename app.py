@@ -117,7 +117,8 @@ if students_data and active_dates:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:58", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        'status': 'absent (Auto)',
+                        # 🚀 FIX: 统一直接使用 'absent'，在底层与手动缺席完美合并
+                        'status': 'absent',
                         'verification_method': 'System Auto-Generated',
                         'firebase_path': f"auto_generated/{d_str}/{sid}"
                     })
@@ -176,12 +177,14 @@ if not df_all.empty:
 # 🚀 GLOBAL UI HELPER: Emoji Formatters
 # ==========================================================
 def display_status_emoji(s):
-    s_lower = str(s).lower()
-    if 'present' in s_lower: return f"🟢 {s.title()}"
-    elif 'absent' in s_lower: return f"🔴 {s.title()}"
-    elif 'late' in s_lower: return f"🟠 {s.title()}"
-    elif 'leave' in s_lower: return f"🔵 {s.title()}"
-    return s.title()
+    s_str = str(s)
+    s_lower = s_str.lower()
+    if '⚠️' in s_str: return s_str 
+    if 'present' in s_lower: return f"🟢 {s_str.title()}"
+    elif 'absent' in s_lower: return f"🔴 {s_str.title()}"
+    elif 'late' in s_lower: return f"🟠 {s_str.title()}"
+    elif 'leave' in s_lower: return f"🔵 {s_str.title()}"
+    return s_str.title()
     
 def display_flow_emoji(f):
     if 'Check-in' in str(f): return f"🟢 {f}"
@@ -578,7 +581,6 @@ else:
             color_map = {
                 'Present': '#2ecc71',
                 'Absent': '#e74c3c',
-                'Absent (Auto)': '#e74c3c',
                 'Late': '#f39c12',
                 'Leave': '#3498db',
                 '⚠️ Auto-Closed': '#95a5a6'
@@ -597,9 +599,13 @@ else:
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
                     
-                    s_c = df_all['status'].value_counts().reset_index()
+                    pie_final_status = df_all.sort_values('dt_obj').drop_duplicates(subset=['record_date', 'student_id'], keep='last')
+                    
+                    s_c = pie_final_status['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
-                    s_c['Status'] = s_c['Status'].astype(str).str.title()
+                    
+                    s_c['Status'] = s_c['Status'].apply(lambda x: str(x) if '⚠️' in str(x) else str(x).title())
+                    
                     s_c = s_c.groupby('Status', as_index=False).sum() 
                     
                     fig_pie = px.pie(s_c, values="Count", names="Status", hole=0.45, color="Status", color_discrete_map=color_map)
@@ -668,7 +674,6 @@ else:
                     daily_final_status = df_all.sort_values('dt_obj').drop_duplicates(subset=['record_date', 'student_id'], keep='last')
                     
                     if not daily_final_status.empty:
-                        # 🚀 NEW: DATE RANGE FILTER FOR TREND CHART
                         min_date = pd.to_datetime(daily_final_status['record_date']).min().date()
                         max_date = pd.to_datetime(daily_final_status['record_date']).max().date()
                         
@@ -684,18 +689,10 @@ else:
                         if not filtered_status.empty:
                             daily_trend = filtered_status.groupby(['record_date', 'status']).size().reset_index(name='Count')
                             
-                            daily_trend['status'] = daily_trend['status'].astype(str).str.title()
-                            trend_color_map = {
-                                'Present': '#2ecc71',
-                                'Absent': '#e74c3c',
-                                'Absent (Auto)': '#e74c3c',
-                                'Late': '#f39c12',
-                                'Leave': '#3498db',
-                                '⚠️ Auto-Closed': '#95a5a6'
-                            }
+                            daily_trend['status'] = daily_trend['status'].apply(lambda x: str(x) if '⚠️' in str(x) else str(x).title())
                             
                             fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
-                                               color_discrete_map=trend_color_map)
+                                               color_discrete_map=color_map)
                             fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)")
                             st.plotly_chart(fig_trend, use_container_width=True)
                         else:
