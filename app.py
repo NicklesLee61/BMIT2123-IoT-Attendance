@@ -140,7 +140,6 @@ if students_data and all_records:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        # ⚠️ 彻底改为 ⚠️ Auto-Closed，视觉隔离，且防清洗拦截！
                         'status': '⚠️ Auto-Closed', 
                         'verification_method': 'System Auto-Generated',
                         'firebase_path': f"auto_checkout/{d_str}/{sid}"
@@ -582,7 +581,7 @@ else:
                 'Absent (Auto)': '#e74c3c',
                 'Late': '#f39c12',
                 'Leave': '#3498db',
-                '⚠️ Auto-Closed': '#95a5a6'  # 🚀 专属的高级灰配色
+                '⚠️ Auto-Closed': '#95a5a6'
             }
 
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
@@ -642,15 +641,22 @@ else:
                             fac_present = pd.DataFrame(columns=['Clean_Faculty', 'Attended'])
                         
                         fac_rate = pd.merge(fac_totals, fac_present, on='Clean_Faculty', how='left').fillna(0)
-                        fac_rate['Rate (%)'] = fac_rate.apply(lambda row: round((row['Attended'] / row['Total_Enrolled']) * 100, 1) if row['Total_Enrolled'] > 0 else 0, axis=1)
                         
-                        fig_fac = px.bar(fac_rate, x='Clean_Faculty', y='Rate (%)', text='Rate (%)', 
-                                         color='Clean_Faculty', 
-                                         hover_data={'Total_Enrolled': True, 'Attended': True, 'Clean_Faculty': False},
-                                         labels={'Clean_Faculty': 'Faculty', 'Rate (%)': 'Attendance Rate (%)', 'Total_Enrolled': 'Registered Students', 'Attended': 'Attended Today'})
-                        fig_fac.update_traces(textposition='outside')
-                        fig_fac.update_layout(showlegend=False, xaxis_title="", yaxis_range=[0, 110], margin=dict(t=30, b=0))
-                        st.plotly_chart(fig_fac, use_container_width=True)
+                        # 🚀 FIX 1: Remove empty faculties (0%) from chart
+                        fac_rate = fac_rate[fac_rate['Total_Enrolled'] > 0]
+                        
+                        if not fac_rate.empty:
+                            fac_rate['Rate (%)'] = fac_rate.apply(lambda row: round((row['Attended'] / row['Total_Enrolled']) * 100, 1), axis=1)
+                            
+                            fig_fac = px.bar(fac_rate, x='Clean_Faculty', y='Rate (%)', text='Rate (%)', 
+                                             color='Clean_Faculty', 
+                                             hover_data={'Total_Enrolled': True, 'Attended': True, 'Clean_Faculty': False},
+                                             labels={'Clean_Faculty': 'Faculty', 'Rate (%)': 'Attendance Rate (%)', 'Total_Enrolled': 'Registered Students', 'Attended': 'Attended Today'})
+                            fig_fac.update_traces(textposition='outside')
+                            fig_fac.update_layout(showlegend=False, xaxis_title="", yaxis_range=[0, 110], margin=dict(t=30, b=0))
+                            st.plotly_chart(fig_fac, use_container_width=True)
+                        else:
+                            st.info(f"No students have classes scheduled on {selected_date_day}s.")
                     else:
                         st.info(f"No students have classes scheduled on {selected_date_day}s.")
 
@@ -659,11 +665,31 @@ else:
                 with st.container(border=True):
                     st.subheader("📈 Daily Attendance Trend")
                     st.caption("Tracking daily attendance variations over time")
-                    unique_daily = df_all.drop_duplicates(subset=['record_date', 'student_id', 'status'])
-                    if not unique_daily.empty:
-                        daily_trend = unique_daily.groupby(['record_date', 'status']).size().reset_index(name='Count')
-                        chart_data = daily_trend.pivot(index='record_date', columns='status', values='Count').fillna(0)
-                        st.bar_chart(chart_data, use_container_width=True)
+                    
+                    # 🚀 FIX 2: Only grab the FINAL status per student per day to stop chart duplication stacking
+                    daily_final_status = df_all.sort_values('dt_obj').drop_duplicates(subset=['record_date', 'student_id'], keep='last')
+                    
+                    if not daily_final_status.empty:
+                        daily_trend = daily_final_status.groupby(['record_date', 'status']).size().reset_index(name='Count')
+                        
+                        # 🚀 FIX 3: Apply consistent color mapping for trends
+                        daily_trend['status'] = daily_trend['status'].astype(str).str.title()
+                        trend_color_map = {
+                            'Present': '#2ecc71',
+                            'Absent': '#e74c3c',
+                            'Absent (Auto)': '#e74c3c',
+                            'Late': '#f39c12',
+                            'Leave': '#3498db',
+                            '⚠️ Auto-Closed': '#95a5a6'
+                        }
+                        
+                        fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
+                                           color_discrete_map=trend_color_map)
+                        fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)")
+                        st.plotly_chart(fig_trend, use_container_width=True)
+                    else:
+                        st.info("No trend data available.")
+                        
                 st.write("<br>", unsafe_allow_html=True)
                 
                 with st.container(border=True):
@@ -679,7 +705,6 @@ else:
                     st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
                     
                     dur_data = []
-                    # 🚀 AUTO-CLOSED 完全避开了时长的异常计算！
                     valid_df = df_all[
                         (~df_all['status'].astype(str).str.contains('absent', case=False, na=False)) & 
                         (~df_all['status'].astype(str).str.contains('Auto', case=False, na=False))
