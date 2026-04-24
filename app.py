@@ -117,7 +117,6 @@ if students_data and active_dates:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:58", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        # 🚀 FIX: 统一直接使用 'absent'，在底层与手动缺席完美合并
                         'status': 'absent',
                         'verification_method': 'System Auto-Generated',
                         'firebase_path': f"auto_generated/{d_str}/{sid}"
@@ -141,7 +140,8 @@ if students_data and all_records:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        'status': '⚠️ Auto-Closed', 
+                        # 🚀 FIX: 完美统一，全用 leave。Duration 靠 verification_method 过滤！
+                        'status': 'leave', 
                         'verification_method': 'System Auto-Generated',
                         'firebase_path': f"auto_checkout/{d_str}/{sid}"
                     })
@@ -179,7 +179,6 @@ if not df_all.empty:
 def display_status_emoji(s):
     s_str = str(s)
     s_lower = s_str.lower()
-    if '⚠️' in s_str: return s_str 
     if 'present' in s_lower: return f"🟢 {s_str.title()}"
     elif 'absent' in s_lower: return f"🔴 {s_str.title()}"
     elif 'late' in s_lower: return f"🟠 {s_str.title()}"
@@ -473,7 +472,8 @@ else:
                 k1.metric("🟢 Present / In", present_count)
                 k2.metric("🔴 Absent", len(latest[latest['status'].astype(str).str.contains('absent', case=False)]))
                 k3.metric("🟠 Late", len(latest[latest['status'] == 'late']))
-                k4.metric("🔵 Leave / Out", len(latest[latest['status'].isin(['leave', 'checked_out', '⚠️ Auto-Closed'])]))
+                # 🚀 FIX: 顶部面板同样完美统一
+                k4.metric("🔵 Leave / Out", len(latest[latest['status'].isin(['leave', 'checked_out'])]))
                 
                 st.write("---")
                 
@@ -582,8 +582,7 @@ else:
                 'Present': '#2ecc71',
                 'Absent': '#e74c3c',
                 'Late': '#f39c12',
-                'Leave': '#3498db',
-                '⚠️ Auto-Closed': '#95a5a6'
+                'Leave': '#3498db'
             }
 
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
@@ -604,7 +603,8 @@ else:
                     s_c = pie_final_status['status'].value_counts().reset_index()
                     s_c.columns = ['Status', 'Count']
                     
-                    s_c['Status'] = s_c['Status'].apply(lambda x: str(x) if '⚠️' in str(x) else str(x).title())
+                    # 🚀 FIX: 完美的统一化 .title()，让饼图干干净净只有四种状态！
+                    s_c['Status'] = s_c['Status'].astype(str).str.title()
                     
                     s_c = s_c.groupby('Status', as_index=False).sum() 
                     
@@ -689,7 +689,8 @@ else:
                         if not filtered_status.empty:
                             daily_trend = filtered_status.groupby(['record_date', 'status']).size().reset_index(name='Count')
                             
-                            daily_trend['status'] = daily_trend['status'].apply(lambda x: str(x) if '⚠️' in str(x) else str(x).title())
+                            # 🚀 FIX: 完美的统一化，干干净净只有四色！
+                            daily_trend['status'] = daily_trend['status'].astype(str).str.title()
                             
                             fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
                                                color_discrete_map=color_map)
@@ -715,9 +716,11 @@ else:
                     st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
                     
                     dur_data = []
+                    
+                    # 🚀 FIX: 利用 verification_method 作废自动记录的停留时长，数学逻辑满分！
                     valid_df = df_all[
                         (~df_all['status'].astype(str).str.contains('absent', case=False, na=False)) & 
-                        (~df_all['status'].astype(str).str.contains('Auto', case=False, na=False))
+                        (~df_all['verification_method'].astype(str).str.contains('System Auto-Generated', case=False, na=False))
                     ]
                     
                     target_sids = students_data.keys() if dur_stu == "-- All Students --" else [profile_mapping[dur_stu]]
