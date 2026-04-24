@@ -94,33 +94,50 @@ if attendance_raw:
                 info['record_date'] = date_key
                 all_records.append(info)
 
-# 🚀 NEW: SMART AUTO-ABSENCE INJECTION ENGINE
+# 🚀 NEW: SMART AUTO-ABSENCE INJECTION ENGINE (自带时空保护锁)
 if students_data and active_dates:
     scanned_lookup = {}
+    student_first_scan = {} # 记录每个老学生的第一次使用系统的日子
+    
     for r in all_records:
         dk = r['record_date']
         sid = r.get('student_id')
-        if dk not in scanned_lookup: scanned_lookup[dk] = set()
-        if sid: scanned_lookup[dk].add(sid)
-        
+        if sid:
+            if dk not in scanned_lookup: scanned_lookup[dk] = set()
+            scanned_lookup[dk].add(sid)
+            # 记住这个学生历史上第一次出现的时间
+            if sid not in student_first_scan or dk < student_first_scan[sid]:
+                student_first_scan[sid] = dk
+                
     for d_str in active_dates:
         try:
-            d_day = datetime.strptime(d_str, "%Y-%m-%d").strftime("%A")
+            curr_date = datetime.strptime(d_str, "%Y-%m-%d").date()
+            d_day = curr_date.strftime("%A")
             scanned_sids = scanned_lookup.get(d_str, set())
             
             for sid, info in students_data.items():
-                stu_schedule = info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
-                if d_day in stu_schedule and sid not in scanned_sids:
-                    all_records.append({
-                        'student_id': sid,
-                        'name': info.get('name', 'Unknown'),
-                        'course': info.get('course', 'Unknown / Other'),
-                        'record_date': d_str,
-                        'timestamp': int(datetime.strptime(f"{d_str} 23:59:58", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        'status': 'absent',
-                        'verification_method': 'System Auto-Generated',
-                        'firebase_path': f"auto_generated/{d_str}/{sid}"
-                    })
+                # 🛡️ 核心修复：拿到注册日，防止把后来的人算到前朝的缺席里
+                reg_date_str = str(info.get('registered_date', ''))
+                if len(reg_date_str) >= 10:
+                    try: reg_date = datetime.strptime(reg_date_str[:10], "%Y-%m-%d").date()
+                    except: reg_date = datetime.strptime(student_first_scan.get(sid, datetime.now().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+                else:
+                    reg_date = datetime.strptime(student_first_scan.get(sid, datetime.now().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+                
+                # 只有当考勤日 >= 学生的注册日时，才去查他有没有逃课！
+                if curr_date >= reg_date:
+                    stu_schedule = info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+                    if d_day in stu_schedule and sid not in scanned_sids:
+                        all_records.append({
+                            'student_id': sid,
+                            'name': info.get('name', 'Unknown'),
+                            'course': info.get('course', 'Unknown / Other'),
+                            'record_date': d_str,
+                            'timestamp': int(datetime.strptime(f"{d_str} 23:59:58", "%Y-%m-%d %H:%M:%S").timestamp()),
+                            'status': 'absent',
+                            'verification_method': 'System Auto-Generated',
+                            'firebase_path': f"auto_generated/{d_str}/{sid}"
+                        })
         except Exception:
             pass
 
@@ -684,7 +701,6 @@ else:
                         min_date = pd.to_datetime(daily_final_status['record_date']).min().date()
                         max_date = pd.to_datetime(daily_final_status['record_date']).max().date()
                         
-                        # 🚀 FIX: 默认只框选最近 7 天，不再挤成一团！
                         default_start = max(min_date, (pd.to_datetime(max_date) - pd.Timedelta(days=6)).date())
                         
                         trend_dates = st.date_input("🗓️ Filter Trend by Date Range:", [default_start, max_date], key="trend_date_picker")
@@ -701,9 +717,8 @@ else:
                             daily_trend['status'] = daily_trend['status'].astype(str).str.title()
                             
                             fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
-                                               color_discrete_map=color_map, text='Count') # 增加数值显示
+                                               color_discrete_map=color_map, text='Count')
                             
-                            # 🚀 FIX: X 轴强制按类别显示，消灭恼人的“无数据空档期”缝隙！
                             fig_trend.update_xaxes(type='category', categoryorder='category ascending')
                             fig_trend.update_traces(textposition='inside')
                             fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.3)
