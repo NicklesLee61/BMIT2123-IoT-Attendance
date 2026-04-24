@@ -21,6 +21,8 @@ FACULTIES = [
     "Unknown / Other"
 ]
 
+DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
 # 🧠 SMART CLEANSING ENGINE
 def clean_course_name(c):
     c_upper = str(c).upper()
@@ -71,7 +73,8 @@ if isinstance(cards_raw, dict):
             students_data[sid] = {
                 "name": card_info.get('name', 'Unknown'),
                 "course": card_info.get('course', 'Unknown / Other'),
-                "student_id": sid
+                "student_id": sid,
+                "schedule": card_info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
             }
 
 profile_mapping = {}
@@ -80,21 +83,57 @@ for sid, info in students_data.items():
     profile_mapping[display_name] = sid
 
 all_records = []
+active_dates = set()
+
 if attendance_raw:
     for date_key, daily_data in attendance_raw.items():
+        active_dates.add(date_key)
         if isinstance(daily_data, dict):
             for rec_id, info in daily_data.items():
                 info['firebase_path'] = f"{date_key}/{rec_id}"
                 info['record_date'] = date_key
                 all_records.append(info)
 
+# 🚀 NEW: SMART AUTO-ABSENCE INJECTION ENGINE
+# Automatically detects if a student missed their custom scheduled class day!
+if students_data and active_dates:
+    scanned_lookup = {}
+    for r in all_records:
+        dk = r['record_date']
+        sid = r.get('student_id')
+        if dk not in scanned_lookup: scanned_lookup[dk] = set()
+        if sid: scanned_lookup[dk].add(sid)
+        
+    for d_str in active_dates:
+        try:
+            d_day = datetime.strptime(d_str, "%Y-%m-%d").strftime("%A")
+            scanned_sids = scanned_lookup.get(d_str, set())
+            
+            for sid, info in students_data.items():
+                # Get student's custom schedule (default Mon-Fri)
+                stu_schedule = info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+                
+                # If today is their class day AND they didn't scan any card today -> Mark Absent
+                if d_day in stu_schedule and sid not in scanned_sids:
+                    all_records.append({
+                        'student_id': sid,
+                        'name': info.get('name', 'Unknown'),
+                        'course': info.get('course', 'Unknown / Other'),
+                        'record_date': d_str,
+                        'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
+                        'status': 'absent (Auto)',
+                        'verification_method': 'System Auto-Generated',
+                        'firebase_path': f"auto_generated/{d_str}/{sid}"
+                    })
+        except Exception:
+            pass
+
 df_all = pd.DataFrame(all_records)
+
 if not df_all.empty:
-    # 🛠️ FIX 1: Safety net in case Raspberry Pi doesn't send verification_method
     if 'verification_method' not in df_all.columns:
         df_all['verification_method'] = 'RFID + FP 2FA'
         
-    # 🛠️ FIX: 智能时间降级机制 (Smart Time Fallback)
     df_all['timestamp'] = pd.to_numeric(df_all.get('timestamp'), errors='coerce')
     df_all['dt_obj'] = pd.to_datetime(df_all['timestamp'], unit='s', errors='coerce')
     df_all['dt_obj'] = df_all['dt_obj'].fillna(pd.to_datetime(df_all['record_date'], errors='coerce'))
@@ -189,6 +228,8 @@ if current_hw_mode == "Enrollment":
                 n_id = st.text_input("Student ID (Required):").strip()
                 n_name = st.text_input("Full Name:").strip()
                 n_course = st.selectbox("Academic Faculty / Program:", FACULTIES)
+                # 🚀 ADDED MULTI-SELECT FOR SCHEDULING
+                n_schedule = st.multiselect("📅 Mandatory Class Days:", DAYS_OF_WEEK, default=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
             with c2:
                 n_rfid = st.text_input(f"RFID UID ({r_status}):", value=scanned_rfid).strip()
                 n_fpid = st.text_input(f"Fingerprint Token ({f_status}):", value=scanned_fpid).strip()
@@ -199,6 +240,8 @@ if current_hw_mode == "Enrollment":
                     st.error("⚠️ Student ID and Name are required for new registration.")
                 elif n_id in students_data:
                     st.error(f"❌ **ID Conflict:** Student ID `{n_id}` already exists. Use the 'Update Student Details' tab instead.")
+                elif not n_schedule:
+                    st.error("⚠️ Please select at least one Mandatory Class Day.")
                 else:
                     rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                     fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
@@ -210,10 +253,10 @@ if current_hw_mode == "Enrollment":
                         st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
 
                     if not has_conflict:
-                        # 🛠️ FIX 2: Ensure student details are saved to WebApp's registry even in HW Sync Mode
                         db.reference(f'/students/{n_id}').update({
                             "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
-                            "rfid": n_rfid if n_rfid else "Unlinked"
+                            "rfid": n_rfid if n_rfid else "Unlinked",
+                            "schedule": n_schedule
                         })
                         
                         if hw_sync_active:
@@ -230,7 +273,8 @@ if current_hw_mode == "Enrollment":
                             db.reference('/cards').push().set({
                                 "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
                                 "card_id": n_rfid if n_rfid else "Unlinked",
-                                "fingerprint_id": n_fpid if n_fpid else "Unlinked"
+                                "fingerprint_id": n_fpid if n_fpid else "Unlinked",
+                                "schedule": n_schedule
                             })
                             st.success(f"Profile {n_name} ({n_id}) successfully created!")
                             
@@ -283,6 +327,10 @@ if current_hw_mode == "Enrollment":
                         c_index = FACULTIES.index(exist_course) if exist_course in FACULTIES else len(FACULTIES)-1
                         u_course = st.selectbox("Academic Faculty / Program:", FACULTIES, index=c_index)
                         
+                        # 🚀 ADDED MULTI-SELECT FOR SCHEDULING UPDATE
+                        exist_schedule = exist_stu.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+                        u_schedule = st.multiselect("📅 Mandatory Class Days:", DAYS_OF_WEEK, default=exist_schedule)
+
                     with c2:
                         u_rfid = st.text_input(f"RFID UID ({ur_status}):", value=display_rfid).strip()
                         u_fpid = st.text_input(f"Fingerprint Token ({uf_status}):", value=display_fpid).strip()
@@ -292,6 +340,8 @@ if current_hw_mode == "Enrollment":
                         fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                         has_conflict = False
                         
+                        if not u_schedule:
+                            st.error("⚠️ Please select at least one Mandatory Class Day."); has_conflict = True
                         if u_rfid and u_rfid in rfid_owners and rfid_owners[u_rfid] != u_sid:
                             st.error(f"❌ **Hardware Conflict:** RFID UID `{u_rfid}` belongs to {rfid_owners[u_rfid]}."); has_conflict = True
                         if u_fpid and u_fpid in fpid_owners and fpid_owners[u_fpid] != u_sid:
@@ -299,13 +349,15 @@ if current_hw_mode == "Enrollment":
 
                         if not has_conflict:
                             db.reference(f'/students/{u_sid}').update({
-                                "name": u_name, "course": u_course, "rfid": u_rfid if u_rfid else "Unlinked"
+                                "name": u_name, "course": u_course, "rfid": u_rfid if u_rfid else "Unlinked",
+                                "schedule": u_schedule
                             })
                             
                             card_payload = {
                                 "student_id": u_sid, "name": u_name, "course": u_course,
                                 "card_id": u_rfid if u_rfid else "Unlinked", 
                                 "fingerprint_id": u_fpid if u_fpid else "Unlinked", 
+                                "schedule": u_schedule,
                                 "registered_date": exist_stu.get('registered_date', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
                             }
                             
@@ -329,10 +381,15 @@ if current_hw_mode == "Enrollment":
                 card_info = next((v for v in cards_raw.values() if v.get('student_id') == sid), {})
                 short_course = clean_course_name(info.get('course', 'N/A'))
                 
+                # Format schedule for display
+                stu_sched = info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+                short_sched = ", ".join([d[:3] for d in stu_sched]) if stu_sched else "None"
+                
                 master_registry.append({
                     "student_id": sid, 
                     "name": info.get('name', 'N/A'), 
                     "course": short_course, 
+                    "class_days": short_sched,
                     "RFID_UID": card_info.get('card_id', 'Unlinked'), 
                     "FP_ID": card_info.get('fingerprint_id', 'N/A')
                 })
@@ -347,6 +404,7 @@ if current_hw_mode == "Enrollment":
                 'student_id': 'Student ID',
                 'name': 'Full Name',
                 'course': 'Faculty',
+                'class_days': 'Class Days',
                 'RFID_UID': 'RFID Tag',
                 'FP_ID': 'FP Slot'
             })
@@ -380,7 +438,6 @@ else:
     with tab_live:
         st.subheader("📋 Real-time Smart Attendance Feed")
         if not df_all.empty:
-            # 🚀 ADDED FACULTY FILTER HERE
             c1, c2, c3 = st.columns([1, 1.5, 1.5])
             with c1: sel_date = st.date_input("📅 Date:", datetime.now(), key="l_date")
             with c2: fac_filter = st.selectbox("🎓 Filter by Faculty:", ["-- All Faculties --"] + FACULTIES, key="l_fac")
@@ -388,7 +445,6 @@ else:
             
             view_df = df_all[df_all['record_date'] == sel_date.strftime("%Y-%m-%d")]
             
-            # 🚀 BUG FIX: USE clean_course_name TO MATCH DATABASE SHORT CODES
             if fac_filter != "-- All Faculties --":
                 view_df = view_df[view_df['course'] == clean_course_name(fac_filter)]
 
@@ -404,7 +460,6 @@ else:
                 
                 st.write("---")
                 
-                # Added 'course' to the display so the teacher can see the faculty column!
                 disp = view_df[['formatted_time', 'name', 'student_id', 'course', 'flow_type', 'status', 'verification_method']].sort_values('formatted_time', ascending=False).copy()
                 
                 if search_l: disp = disp[disp[['student_id', 'name']].apply(lambda row: row.astype(str).str.contains(search_l, case=False).any(), axis=1)]
@@ -509,6 +564,7 @@ else:
             color_map = {
                 'Present': '#2ecc71',
                 'Absent': '#e74c3c',
+                'Absent (Auto)': '#e74c3c',
                 'Late': '#f39c12',
                 'Leave': '#3498db'
             }
@@ -542,12 +598,16 @@ else:
                     
                     fac_date = st.date_input("Select Date for Faculty Analytics:", datetime.now(), key="fac_date_picker")
                     selected_date_str = fac_date.strftime("%Y-%m-%d")
+                    selected_date_day = fac_date.strftime("%A")
                     st.caption(f"Attendance rate based on total enrolled students per faculty for {selected_date_str}")
                     
                     stu_list = []
                     for sid_reg, info_reg in students_data.items():
-                        clean_c = clean_course_name(info_reg.get('course', ''))
-                        stu_list.append({'student_id': sid_reg, 'Clean_Faculty': clean_c})
+                        # Only count students whose schedule includes this day for accurate rate calculation!
+                        stu_sched = info_reg.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+                        if selected_date_day in stu_sched:
+                            clean_c = clean_course_name(info_reg.get('course', ''))
+                            stu_list.append({'student_id': sid_reg, 'Clean_Faculty': clean_c})
                     
                     df_stu = pd.DataFrame(stu_list)
                     
@@ -577,7 +637,7 @@ else:
                         fig_fac.update_layout(showlegend=False, xaxis_title="", yaxis_range=[0, 110], margin=dict(t=30, b=0))
                         st.plotly_chart(fig_fac, use_container_width=True)
                     else:
-                        st.info("No students registered yet.")
+                        st.info(f"No students have classes scheduled on {selected_date_day}s.")
 
                 st.write("<br>", unsafe_allow_html=True)
 
@@ -627,7 +687,6 @@ else:
                     
                     export_filter = st.radio("Select Export Range:", ["All Time (Full History)", "Specific Date"], horizontal=True)
                     
-                    # 🚀 ADDED FACULTY FILTER FOR EXPORT HERE TOO
                     ex_c1, ex_c2 = st.columns(2)
                     
                     if export_filter == "Specific Date":
@@ -638,7 +697,6 @@ else:
                         export_df = df_all.copy()
                         with ex_c1: export_fac = st.selectbox("Filter by Faculty (Export):", ["-- All Faculties --"] + FACULTIES, key="ex_fac")
                     
-                    # 🚀 BUG FIX: USE clean_course_name TO MATCH DATABASE SHORT CODES
                     if export_fac != "-- All Faculties --":
                         export_df = export_df[export_df['course'] == clean_course_name(export_fac)]
                         
