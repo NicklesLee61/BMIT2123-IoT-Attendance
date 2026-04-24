@@ -140,8 +140,8 @@ if students_data and all_records:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        # ⚠️ 避开 "check" 关键词拦截，改用 'leave (Auto)'
-                        'status': 'leave (Auto)', 
+                        # ⚠️ 彻底改为 ⚠️ Auto-Closed，视觉隔离，且防清洗拦截！
+                        'status': '⚠️ Auto-Closed', 
                         'verification_method': 'System Auto-Generated',
                         'firebase_path': f"auto_checkout/{d_str}/{sid}"
                     })
@@ -471,7 +471,7 @@ else:
                 k1.metric("🟢 Present / In", present_count)
                 k2.metric("🔴 Absent", len(latest[latest['status'].astype(str).str.contains('absent', case=False)]))
                 k3.metric("🟠 Late", len(latest[latest['status'] == 'late']))
-                k4.metric("🔵 Leave / Out", len(latest[latest['status'].isin(['leave', 'checked_out'])]))
+                k4.metric("🔵 Leave / Out", len(latest[latest['status'].isin(['leave', 'checked_out', '⚠️ Auto-Closed'])]))
                 
                 st.write("---")
                 
@@ -582,7 +582,7 @@ else:
                 'Absent (Auto)': '#e74c3c',
                 'Late': '#f39c12',
                 'Leave': '#3498db',
-                'Leave (Auto)': '#3498db'
+                '⚠️ Auto-Closed': '#95a5a6'  # 🚀 专属的高级灰配色
             }
 
             sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📑 Executive Summary", "📈 Behavioral Analytics", "📥 Report Generation"])
@@ -679,7 +679,7 @@ else:
                     st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
                     
                     dur_data = []
-                    # 🚀 BUG FIX: Exclude both 'absent' and 'Auto' from duration calculation!
+                    # 🚀 AUTO-CLOSED 完全避开了时长的异常计算！
                     valid_df = df_all[
                         (~df_all['status'].astype(str).str.contains('absent', case=False, na=False)) & 
                         (~df_all['status'].astype(str).str.contains('Auto', case=False, na=False))
