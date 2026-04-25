@@ -9,6 +9,7 @@ import io
 
 # ==========================================================
 # 🚀 GLOBAL FACULTY LIST
+# Defines the standardized academic faculties for the system.
 # ==========================================================
 FACULTIES = [
     "FAFB (Faculty of Accountancy, Finance and Business)",
@@ -23,7 +24,10 @@ FACULTIES = [
 
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+# ==========================================================
 # 🧠 SMART CLEANSING ENGINE
+# Normalizes inconsistent faculty inputs (e.g., from CSV) into standardized short codes.
+# ==========================================================
 def clean_course_name(c):
     c_upper = str(c).upper()
     if 'FAFB' in c_upper: return 'FAFB'
@@ -37,11 +41,13 @@ def clean_course_name(c):
 
 # ==========================================================
 # 1. SYSTEM INITIALIZATION & SECURE CLOUD AUTHENTICATION
+# Sets up Streamlit page configuration and securely connects to Firebase Realtime Database.
 # ==========================================================
 st.set_page_config(page_title="IoT Master Command", layout="wide", page_icon="🛡️")
 
 if not firebase_admin._apps:
     try:
+        # Load credentials either from Streamlit Secrets (Cloud) or local JSON (Local Testing)
         if "firebase" in st.secrets:
             cred_dict = dict(st.secrets["firebase"])
             cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
@@ -57,15 +63,18 @@ if not firebase_admin._apps:
 
 # ==========================================================
 # 2. DATA ENGINE: SMART PROCESSING & DURATION LOGIC
+# Fetches raw data from Firebase and prepares it for analytics.
 # ==========================================================
 control_ref = db.reference('/control')
 hw_state = control_ref.get() or {"mode": "Attendance", "is_locked": False}
 current_hw_mode = hw_state.get('mode', 'Attendance')
 
+# Fetch core database nodes
 students_data = db.reference('/students').get() or {} 
 cards_raw = db.reference('/cards').get() or {}       
 attendance_raw = db.reference('/attendance').get() or {}
 
+# Cross-reference hardware cards with student registry to ensure data integrity
 if isinstance(cards_raw, dict):
     for push_id, card_info in cards_raw.items():
         sid = card_info.get('student_id')
@@ -77,11 +86,13 @@ if isinstance(cards_raw, dict):
                 "schedule": card_info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
             }
 
+# Create a mapping dictionary for UI dropdowns (Display Name -> Student ID)
 profile_mapping = {}
 for sid, info in students_data.items():
     display_name = f"{info.get('name', 'Unknown')} ({sid})"
     profile_mapping[display_name] = sid
 
+# Flatten the nested Firebase attendance structure into a list of dictionaries
 all_records = []
 active_dates = set()
 
@@ -94,18 +105,22 @@ if attendance_raw:
                 info['record_date'] = date_key
                 all_records.append(info)
 
-# 🚀 NEW: SMART AUTO-ABSENCE INJECTION ENGINE (自带时空保护锁)
+# ==========================================================
+# 🚀 SMART AUTO-ABSENCE INJECTION ENGINE (With Historical Protection Lock)
+# Automatically detects if a student missed a scheduled class day and marks them absent.
+# ==========================================================
 if students_data and active_dates:
     scanned_lookup = {}
-    student_first_scan = {} # 记录每个老学生的第一次使用系统的日子
+    student_first_scan = {} # Tracks the earliest recorded date for each student
     
+    # Map out who tapped on which dates
     for r in all_records:
         dk = r['record_date']
         sid = r.get('student_id')
         if sid:
             if dk not in scanned_lookup: scanned_lookup[dk] = set()
             scanned_lookup[dk].add(sid)
-            # 记住这个学生历史上第一次出现的时间
+            # Record the very first time a student appears in the system
             if sid not in student_first_scan or dk < student_first_scan[sid]:
                 student_first_scan[sid] = dk
                 
@@ -116,7 +131,7 @@ if students_data and active_dates:
             scanned_sids = scanned_lookup.get(d_str, set())
             
             for sid, info in students_data.items():
-                # 🛡️ 核心修复：拿到注册日，防止把后来的人算到前朝的缺席里
+                # 🛡️ Historical Protection Lock: Prevent backdating absences for new students
                 reg_date_str = str(info.get('registered_date', ''))
                 if len(reg_date_str) >= 10:
                     try: reg_date = datetime.strptime(reg_date_str[:10], "%Y-%m-%d").date()
@@ -124,9 +139,10 @@ if students_data and active_dates:
                 else:
                     reg_date = datetime.strptime(student_first_scan.get(sid, datetime.now().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
                 
-                # 只有当考勤日 >= 学生的注册日时，才去查他有没有逃课！
+                # Only check for absences if the current evaluation date is ON or AFTER the student's registration date
                 if curr_date >= reg_date:
                     stu_schedule = info.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+                    # If today is their class day AND they didn't tap their card -> Mark Absent
                     if d_day in stu_schedule and sid not in scanned_sids:
                         all_records.append({
                             'student_id': sid,
@@ -141,15 +157,19 @@ if students_data and active_dates:
         except Exception:
             pass
 
-# 🚀 NEW: SMART AUTO-CHECKOUT INJECTION ENGINE
+# ==========================================================
+# 🚀 SMART AUTO-CHECKOUT INJECTION ENGINE
+# Detects students who forgot to tap out and artificially closes their session at 23:59.
+# ==========================================================
 if students_data and all_records:
     temp_df = pd.DataFrame(all_records)
     if not temp_df.empty and 'status' in temp_df.columns:
+        # Exclude absences to only count physical hardware taps
         present_logs = temp_df[~temp_df['status'].astype(str).str.contains('absent', case=False, na=False)]
         if not present_logs.empty:
             tap_counts = present_logs.groupby(['student_id', 'record_date']).size()
             for (sid, d_str), count in tap_counts.items():
-                if count % 2 != 0: 
+                if count % 2 != 0: # An odd number of taps implies the student forgot to check out
                     info = students_data.get(sid, {})
                     all_records.append({
                         'student_id': sid,
@@ -157,13 +177,14 @@ if students_data and all_records:
                         'course': info.get('course', 'Unknown / Other'),
                         'record_date': d_str,
                         'timestamp': int(datetime.strptime(f"{d_str} 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()),
-                        'status': 'present', 
-                        'verification_method': 'System Auto-Checkout',
+                        'status': 'present', # Keeps their daily status as "Present"
+                        'verification_method': 'System Auto-Checkout', # Tagged for duration filter
                         'firebase_path': f"auto_checkout/{d_str}/{sid}"
                     })
 
 df_all = pd.DataFrame(all_records)
 
+# Execute Data Transformations if records exist
 if not df_all.empty:
     if 'verification_method' not in df_all.columns:
         df_all['verification_method'] = 'RFID + FP 2FA'
@@ -175,6 +196,7 @@ if not df_all.empty:
     df_all['formatted_time'] = df_all['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_all = df_all.sort_values('dt_obj')
     
+    # 🧹 Ultimate Cleansing: Normalizes various test data tags back into the 4 standard core states
     def force_clean_status(row):
         s_low = str(row.get('status', '')).lower()
         vm_low = str(row.get('verification_method', '')).lower()
@@ -186,23 +208,28 @@ if not df_all.empty:
         return s_low
         
     df_all['status'] = df_all.apply(force_clean_status, axis=1)
+    
+    # Rank taps sequentially per student per day (1st tap, 2nd tap, etc.)
     df_all['tap_rank'] = df_all.groupby(['student_id', 'record_date']).cumcount() + 1
     
+    # Determine Log Flow (Check-in vs Check-out) based on tap sequence
     def determine_flow(row):
         stat = str(row.get('status', '')).lower()
         vm = str(row.get('verification_method', '')).lower()
         if 'absent' in stat: return "--"
-        if 'auto-checkout' in vm: return "Check-out (Auto)"
+        if 'auto-checkout' in vm: return "Check-out (Auto)" # Highlights system-generated check-outs
         if stat == 'leave': return "Check-out (Early)"
         return "Check-in" if row['tap_rank'] % 2 != 0 else "Check-out"
             
     df_all['flow_type'] = df_all.apply(determine_flow, axis=1)
     
+    # Map clean course names
     course_map = {k: clean_course_name(v.get('course', '')) for k, v in students_data.items()}
     df_all['course'] = df_all['student_id'].map(course_map).fillna('UNKNOWN / OTHER')
 
 # ==========================================================
 # 🚀 GLOBAL UI HELPER: Emoji Formatters
+# Provides visual distinction for data table elements.
 # ==========================================================
 def display_status_emoji(s):
     s_low = str(s).lower()
@@ -220,11 +247,13 @@ def display_flow_emoji(f):
 
 # ==========================================================
 # 3. SIDEBAR: PURE REMOTE HARDWARE COMMAND CENTER
+# Acts as a remote control for the physical Raspberry Pi hardware.
 # ==========================================================
 st.sidebar.title("🎮 Master Control Center")
 st.sidebar.markdown(f"**Physical System Mode:** `{current_hw_mode}`")
 st.sidebar.markdown("---")
 
+# Toggle hardware state between Attendance and Enrollment Mode
 next_mode = "Enrollment" if current_hw_mode == "Attendance" else "Attendance"
 if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_container_width=True):
     control_ref.update({"mode": next_mode})
@@ -232,12 +261,14 @@ if st.sidebar.button(f"🔄 Switch to {next_mode} Mode", type="primary", use_con
 
 # ==========================================================
 # 4. DYNAMIC INTERFACE: MODE-AWARE DASHBOARD
+# Changes UI layout completely depending on current hardware mode.
 # ==========================================================
 st.title(f"🛡️ Smart Campus Portal: {current_hw_mode}")
 
 if current_hw_mode == "Enrollment":
     st.subheader("Student Enrollment & Management Hub")
     
+    # Fetch any unassigned cards currently scanned on the hardware
     pending_reg = db.reference('/pending_registration').get()
     scanned_rfid = str(pending_reg.get('rfid', '')) if pending_reg else ""
     scanned_fpid = str(pending_reg.get('fp_id', '')) if pending_reg else ""
@@ -245,22 +276,22 @@ if current_hw_mode == "Enrollment":
     tab_reg, tab_update, tab_list = st.tabs(["➕ New Registration", "🔄 Update Student Details", "🗃️ Master Registry"])
     
     # ---------------------------------------------------------
-    # TAB 1: PURE NEW REGISTRATION
+    # TAB 1: PURE NEW REGISTRATION (With Bulk Import)
     # ---------------------------------------------------------
     with tab_reg:
         st.markdown("### 📝 Register New Student")
         
-        # 🚀 NEW: GOOGLE SHEET IMPORT SECTION (Option B - Teacher's Favorite)
+        # 🚀 BULK IMPORT MODULE (Google Sheet Integration)
         with st.expander("📤 Bulk Import Students via Google Sheet (Option B)", expanded=False):
             st.markdown("#### 🔗 1. Prepare your Google Sheet")
-            st.info("确保表格包含列: `student_id`, `name`, `course`。并将表格的权限设置为 **'Anyone with the link can view'**。")
+            st.info("Ensure headers include: `student_id`, `name`, `course`. Set Share permissions to **'Anyone with the link can view'**.")
             
             gs_url = st.text_input("Paste Google Sheet URL:", placeholder="https://docs.google.com/spreadsheets/d/.../edit")
             
             if st.button("🚀 Start Cloud Sync & Import", type="primary", use_container_width=True):
                 if gs_url:
                     try:
-                        # 核心转换逻辑：将普通的谷歌表格链接转为可以直接读取的 CSV API 链接
+                        # Transform standard Google Sheet URL into a direct CSV export API link
                         if "/edit" in gs_url:
                             target_url = gs_url.split("/edit")[0] + "/export?format=csv"
                         else:
@@ -274,10 +305,11 @@ if current_hw_mode == "Enrollment":
                             name_imp = str(row.get('name', '')).strip()
                             course_raw = str(row.get('course', 'Unknown / Other')).strip()
                             
-                            # 过滤掉空行和无效数据
+                            # Filter out empty rows/NaNs
                             if sid_imp and name_imp and sid_imp.lower() != 'nan':
                                 if sid_imp not in students_data:
                                     clean_f = clean_course_name(course_raw)
+                                    # Inject Fallback Defaults (Default Schedule, Registration Time, Unlinked HW)
                                     db.reference(f'/students/{sid_imp}').update({
                                         "student_id": sid_imp, "name": name_imp, "course": clean_f,
                                         "registered_date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
@@ -293,6 +325,7 @@ if current_hw_mode == "Enrollment":
 
         st.markdown("---")
         
+        # Hardware Polling Interface
         col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
             if st.button("🔄 Fetch Scanned Card", key="fetch_new", type="primary"):
@@ -311,6 +344,7 @@ if current_hw_mode == "Enrollment":
             r_status = "⚪ Waiting for Scan"
             f_status = "⚪ Waiting for Scan"
 
+        # Registration Form
         with st.form("enroll_form_new"):
             c1, c2 = st.columns(2)
             with c1:
@@ -331,6 +365,7 @@ if current_hw_mode == "Enrollment":
                 elif not n_schedule:
                     st.error("⚠️ Please select at least one Mandatory Class Day.")
                 else:
+                    # Prevent hardware duplication cross-checks
                     rfid_owners = {str(v.get('card_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('card_id')).strip() not in ['Unlinked', '', 'None']}
                     fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                     has_conflict = False
@@ -341,12 +376,14 @@ if current_hw_mode == "Enrollment":
                         st.error(f"❌ **Hardware Conflict:** Fingerprint Token `{n_fpid}` is already in use by {fpid_owners[n_fpid]}."); has_conflict = True
 
                     if not has_conflict:
+                        # Write structured profile to Firebase
                         db.reference(f'/students/{n_id}').update({
                             "student_id": n_id, "name": n_name, "course": n_course, "registered_date": n_date,
                             "rfid": n_rfid if n_rfid else "Unlinked",
                             "schedule": n_schedule
                         })
                         
+                        # Handshake protocol with physical hardware
                         if hw_sync_active:
                             db.reference('/pending_registration').update({
                                 "status": "ready_to_enroll",
@@ -370,6 +407,7 @@ if current_hw_mode == "Enrollment":
 
     # ---------------------------------------------------------
     # TAB 2: UPDATE / RE-BIND 
+    # Edits existing profiles or links newly scanned hardware tokens to old profiles.
     # ---------------------------------------------------------
     with tab_update:
         st.markdown("### 🔄 Update Student Details / Re-bind Card")
@@ -391,6 +429,7 @@ if current_hw_mode == "Enrollment":
                 exist_card_key = next((k for k, v in cards_raw.items() if v.get('student_id') == u_sid), None)
                 exist_card = cards_raw.get(exist_card_key, {}) if exist_card_key else {}
                 
+                # Check if hardware has fresh scans pending to be bound to this profile
                 if pending_reg:
                     display_rfid = scanned_rfid
                     display_fpid = scanned_fpid
@@ -427,6 +466,7 @@ if current_hw_mode == "Enrollment":
                         fpid_owners = {str(v.get('fingerprint_id')).strip(): v.get('student_id') for v in cards_raw.values() if str(v.get('fingerprint_id')).strip() not in ['Unlinked', '', 'None']}
                         has_conflict = False
                         
+                        # Validate no hardware conflicts with other students
                         if not u_schedule:
                             st.error("⚠️ Please select at least one Mandatory Class Day."); has_conflict = True
                         if u_rfid and u_rfid in rfid_owners and rfid_owners[u_rfid] != u_sid:
@@ -460,6 +500,7 @@ if current_hw_mode == "Enrollment":
 
     # ---------------------------------------------------------
     # TAB 3: MASTER REGISTRY
+    # Displays the entire datatable of enrolled students and provides deletion rights.
     # ---------------------------------------------------------
     with tab_list:
         if students_data:
@@ -483,6 +524,7 @@ if current_hw_mode == "Enrollment":
             reg_df = pd.DataFrame(master_registry).sort_values("student_id")
             search_query = st.text_input("🔍 Search Student (by ID, Name, or Course):", placeholder="e.g. 2413458, Sakiko...")
             if search_query:
+                # Apply row filtering based on generic text matching
                 reg_df = reg_df[reg_df[['student_id', 'name', 'course']].apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)]
             reg_df = reg_df.reset_index(drop=True); reg_df.index += 1
             
@@ -519,6 +561,9 @@ if current_hw_mode == "Enrollment":
                         if st.button("❌ Cancel"): st.session_state['delete_target'] = None; st.rerun()
 
 else:
+    # ==========================================================
+    # ATTENDANCE MODE (Dashboard and Admin Interventions)
+    # ==========================================================
     tab_live, tab_console, tab_m3 = st.tabs(["📺 Live Monitoring", "🛠️ Manual Record Console", "📊 Module 3: Reporting"])
     
     with tab_live:
@@ -538,6 +583,7 @@ else:
                 latest = view_df.drop_duplicates(subset=['student_id'], keep='last')
                 k1, k2, k3, k4 = st.columns(4)
                 
+                # Daily Roll-Call Metrics
                 present_count = len(latest[latest['status'] == 'present'])
                 k1.metric("🟢 Present / In", present_count)
                 k2.metric("🔴 Absent", len(latest[latest['status'] == 'absent']))
@@ -572,6 +618,7 @@ else:
                     st.info(f"No records for {sel_date.strftime('%Y-%m-%d')}.")
         else: st.info("Waiting for hardware synchronization...")
 
+    # Allows Admins/Lecturers to force sync manual records or edit historic mistakes
     with tab_console:
         st.header("🛠️ Attendance Management Console")
         st.write("---")
@@ -641,12 +688,14 @@ else:
 
     # ==========================================================
     # 📊 tab_m3: REDESIGNED MULTI-PAGE ANALYTICS 
+    # High-level Data Visualization utilizing Plotly.
     # ==========================================================
     with tab_m3:
         st.header("📊 Advanced Analytics Dashboard")
         st.write("Real-time behavioral insights and comprehensive student performance tracking.")
         
         if not df_all.empty:
+            # Color Mapping ensuring UI aesthetics are consistent globally
             color_map = {
                 'Present': '#2ecc71',
                 'Absent': '#e74c3c',
@@ -667,6 +716,7 @@ else:
                     st.subheader("🍩 Status Composition")
                     st.caption("Overall class participation distribution")
                     
+                    # Chart Data Prep: Ensure only the final status per day dictates the pie slice.
                     pie_final_status = df_all.sort_values('dt_obj').drop_duplicates(subset=['record_date', 'student_id'], keep='last')
                     
                     s_c = pie_final_status['status'].value_counts().reset_index()
@@ -690,6 +740,7 @@ else:
                     st.caption(f"Attendance rate based on total enrolled students per faculty for {selected_date_str}")
                     
                     stu_list = []
+                    # Cross-referencing against faculty schedules to avoid misleading 0% reporting on off-days.
                     for sid_reg, info_reg in students_data.items():
                         stu_sched = info_reg.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
                         if selected_date_day in stu_sched:
@@ -715,6 +766,7 @@ else:
                         
                         fac_rate = pd.merge(fac_totals, fac_present, on='Clean_Faculty', how='left').fillna(0)
                         
+                        # Filter out faculties with zero scheduled enrollments on that day
                         fac_rate = fac_rate[fac_rate['Total_Enrolled'] > 0]
                         
                         if not fac_rate.empty:
@@ -738,12 +790,14 @@ else:
                     st.subheader("📈 Daily Attendance Trend")
                     st.caption("Tracking daily attendance variations over time")
                     
+                    # Fetch final status per student avoiding duplicated vertical bars
                     daily_final_status = df_all.sort_values('dt_obj').drop_duplicates(subset=['record_date', 'student_id'], keep='last')
                     
                     if not daily_final_status.empty:
                         min_date = pd.to_datetime(daily_final_status['record_date']).min().date()
                         max_date = pd.to_datetime(daily_final_status['record_date']).max().date()
                         
+                        # Default timeframe: Last 7 Days to avoid dense illegible charting
                         default_start = max(min_date, (pd.to_datetime(max_date) - pd.Timedelta(days=6)).date())
                         
                         trend_dates = st.date_input("🗓️ Filter Trend by Date Range:", [default_start, max_date], key="trend_date_picker")
@@ -762,6 +816,7 @@ else:
                             fig_trend = px.bar(daily_trend, x='record_date', y='Count', color='status', 
                                                color_discrete_map=color_map, text='Count')
                             
+                            # Force categorical X-Axis to eliminate ugly blank spacing between dates
                             fig_trend.update_xaxes(type='category', categoryorder='category ascending')
                             fig_trend.update_traces(textposition='inside')
                             fig_trend.update_layout(xaxis_title="", yaxis_title="Student Count", showlegend=True, margin=dict(t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.3)
@@ -786,6 +841,8 @@ else:
                     st.caption(f"Active hours spent in session (Check-in to Check-out) for {dur_date_str}")
                     
                     dur_data = []
+                    
+                    # 🛡️ Filter Logic: Discard Absences and System-generated auto-checkouts to preserve duration accuracy
                     valid_df = df_all[
                         (df_all['status'] != 'absent') & 
                         (~df_all['verification_method'].astype(str).str.contains('System Auto', case=False, na=False))
@@ -845,6 +902,7 @@ else:
                         st.dataframe(export_disp, height=300, use_container_width=True)
                         st.write("<br>", unsafe_allow_html=True)
                         
+                        # Generate the byte stream for the official .xlsx downloadable artifact
                         buf = io.BytesIO()
                         with pd.ExcelWriter(buf, engine='xlsxwriter') as wr:
                             export_disp.to_excel(wr, index=False)
