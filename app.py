@@ -250,6 +250,49 @@ if current_hw_mode == "Enrollment":
     with tab_reg:
         st.markdown("### 📝 Register New Student")
         
+        # 🚀 NEW: GOOGLE SHEET IMPORT SECTION (Option B - Teacher's Favorite)
+        with st.expander("📤 Bulk Import Students via Google Sheet (Option B)", expanded=False):
+            st.markdown("#### 🔗 1. Prepare your Google Sheet")
+            st.info("确保表格包含列: `student_id`, `name`, `course`。并将表格的权限设置为 **'Anyone with the link can view'**。")
+            
+            gs_url = st.text_input("Paste Google Sheet URL:", placeholder="https://docs.google.com/spreadsheets/d/.../edit")
+            
+            if st.button("🚀 Start Cloud Sync & Import", type="primary", use_container_width=True):
+                if gs_url:
+                    try:
+                        # 核心转换逻辑：将普通的谷歌表格链接转为可以直接读取的 CSV API 链接
+                        if "/edit" in gs_url:
+                            target_url = gs_url.split("/edit")[0] + "/export?format=csv"
+                        else:
+                            target_url = gs_url
+                            
+                        df_cloud = pd.read_csv(target_url)
+                        
+                        import_count = 0
+                        for _, row in df_cloud.iterrows():
+                            sid_imp = str(row.get('student_id', '')).strip()
+                            name_imp = str(row.get('name', '')).strip()
+                            course_raw = str(row.get('course', 'Unknown / Other')).strip()
+                            
+                            # 过滤掉空行和无效数据
+                            if sid_imp and name_imp and sid_imp.lower() != 'nan':
+                                if sid_imp not in students_data:
+                                    clean_f = clean_course_name(course_raw)
+                                    db.reference(f'/students/{sid_imp}').update({
+                                        "student_id": sid_imp, "name": name_imp, "course": clean_f,
+                                        "registered_date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                        "schedule": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+                                        "rfid": "Unlinked"
+                                    })
+                                    import_count += 1
+                        st.success(f"✅ Success! {import_count} new students imported directly from Google Sheet."); time.sleep(2); st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Connection Failed: Make sure the Sheet is set to 'Public' or 'Anyone with link'. Error: {e}")
+                else:
+                    st.warning("⚠️ Please paste a valid Google Sheet URL first.")
+
+        st.markdown("---")
+        
         col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
             if st.button("🔄 Fetch Scanned Card", key="fetch_new", type="primary"):
