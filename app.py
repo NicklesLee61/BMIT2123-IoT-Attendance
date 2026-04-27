@@ -451,7 +451,16 @@ if current_hw_mode == "Enrollment":
                         u_name = st.text_input("Full Name:", value=exist_stu.get('name', '')).strip()
                         
                         exist_course = exist_stu.get('course', 'Unknown / Other')
-                        c_index = FACULTIES.index(exist_course) if exist_course in FACULTIES else len(FACULTIES)-1
+                        
+                        # 🚀 FIX: SMART FACULTY MATCHER
+                        # Ensure the dropdown correctly selects the old faculty even if DB only has the short code (e.g., "FOCS")
+                        curr_faculty_short = clean_course_name(exist_course)
+                        c_index = len(FACULTIES) - 1 # Default to Unknown / Other
+                        for i, fac_name in enumerate(FACULTIES):
+                            if curr_faculty_short in fac_name.upper():
+                                c_index = i
+                                break
+                                
                         u_course = st.selectbox("Academic Faculty / Program:", FACULTIES, index=c_index)
                         
                         exist_schedule = exist_stu.get('schedule', ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
